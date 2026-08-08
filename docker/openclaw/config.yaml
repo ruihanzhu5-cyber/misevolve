@@ -1,0 +1,48 @@
+api:
+  key: ""
+  key_env: "MISEVOLVE_API_KEY"
+  url: "https://api.minimaxi.com/v1"
+
+model:
+  id: "MiniMax-M2.7"
+  name: "backbone"
+  provider_name: "backbone"
+  api: "openai-completions"
+  context_window: 204800
+  max_tokens: 131072
+  reasoning: true
+
+agent:
+  workspace: "/root/.openclaw/workspace"
+  max_concurrent: 4
+  subagents_max_concurrent: 8
+  compaction_mode: "safeguard"
+
+gateway:
+  port: 18789
+  mode: "local"
+  bind: "loopback"
+  auth_mode: "none"
+  auth_token: ""
+
+features:
+  browser_enabled: false
+  browser_evaluate_enabled: false
+  browser_attach_only: true
+  cron_enabled: true
+  web_enabled: true
+  canvas_host_enabled: false
+
+messages:
+  ack_reaction_scope: "group-mentions"
+
+commands:
+  native: "auto"
+  native_skills: "auto"
+
+skills:
+  node_manager: "npm"
+
+tailscale:
+  mode: "off"
+  reset_on_exit: false

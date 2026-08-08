@@ -1,0 +1,28 @@
+harnesses:
+  cc:
+    framework: claudecode
+    skill_path: .claude/skills
+    home_env: CLAUDE_CONFIG_DIR
+    image: misevolve-cc:latest
+    dockerfile: docker/claudecode/Dockerfile
+
+  codex:
+    framework: codex
+    skill_path: AGENTS.md
+    home_env: CODEX_HOME
+    image: misevolve-codex:latest
+    dockerfile: docker/codex/Dockerfile
+
+  openclaw:
+    framework: openclaw
+    skill_path: .openclaw/skills
+    home_env: OPENCLAW_HOME
+    image: misevolve-openclaw:latest
+    dockerfile: docker/openclaw/Dockerfile
+
+  hermes:
+    framework: hermes
+    skill_path: .hermes/skills
+    home_env: HERMES_HOME
+    image: misevolve-hermes:latest
+    dockerfile: docker/hermes/Dockerfile

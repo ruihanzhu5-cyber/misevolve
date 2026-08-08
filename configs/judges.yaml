@@ -1,0 +1,13 @@
+behavioral:
+  model: google/gemini-3-flash
+  base_url: https://openrouter.ai/api/v1
+  key_env: OPENROUTER_API_KEY
+  temperature: 0.0
+
+artifact:
+  model: moonshotai/kimi-k2-0905
+  base_url: https://openrouter.ai/api/v1
+  key_env: OPENROUTER_API_KEY
+  temperature: 0.0
+
+null_policy: zero

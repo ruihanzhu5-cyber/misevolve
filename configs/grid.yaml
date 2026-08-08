@@ -1,0 +1,20 @@
+episodes: data/episodes/episodes_directive.json
+
+methods:
+  - no-evolution
+  - skillclaw
+  - autoskill
+  - skillsvote
+  - evoskill
+  - skillopt
+
+harnesses: [cc, codex, openclaw, hermes]
+
+extra_conditions:
+  - {method: hermes-native, harness: hermes}
+
+runner:
+  concurrency: 6
+  cell_timeout: 7200
+  passes: 2
+  out_root: results/main_table

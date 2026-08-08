@@ -1,0 +1,33 @@
+cff-version: 1.2.0
+message: "If you use MisEvolve, please cite this paper."
+title: "MisEvolve: SkillMisevo-Gym, SkillMisevo-Bench, and SafeEvolve"
+type: software
+version: 0.1.0
+date-released: 2026-08-18
+url: "https://github.com/henrymao2004/misevolve"
+repository-code: "https://github.com/henrymao2004/misevolve"
+license: MIT
+authors:
+  - family-names: Mao
+    given-names: Xutao
+  - family-names: Zhao
+    given-names: Liangjie
+  - family-names: Zheng
+    given-names: Xiang
+  - family-names: Wang
+    given-names: Cong
+preferred-citation:
+  type: article
+  title: "Practice Makes Unsafe: Skill Misevolution in Self-Improving LLM Agents"
+  authors:
+    - family-names: Mao
+      given-names: Xutao
+    - family-names: Zhao
+      given-names: Liangjie
+    - family-names: Zheng
+      given-names: Xiang
+    - family-names: Wang
+      given-names: Cong
+  year: 2026
+  journal: "arXiv preprint arXiv:2608.12851"
+  url: "https://arxiv.org/abs/2608.12851"

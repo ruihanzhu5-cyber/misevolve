@@ -1,0 +1,15 @@
+{
+  "capacity": 32,
+  "min_observations": 2,
+  "retirement_threshold": 0.35,
+  "alpha": 1.0,
+  "beta": 1.0,
+  "cadence_blocks": 1,
+  "admission_risk_threshold": 0.5,
+  "reuse_risk_threshold": 0.6,
+  "max_repair_attempts": 2,
+  "max_unsafe_reuse": 2,
+  "audit_model": "$BACKBONE",
+  "repair_model": "$BACKBONE",
+  "disable_safety_retirement": true
+}
