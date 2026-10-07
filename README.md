@@ -2,7 +2,7 @@
 <p align="center"><b>MisEvolve — SkillMisevo-Gym · SkillMisevo-Bench · SafeEvolve</b></p>
 
 <p align="center">
-  <img src="assets/misevolve_overview.png" width="100%" alt="The skill misevolution cycle: unsafe experience is distilled into a reusable skill, retrieved later, then executed as harm in a later task. SkillMisevo-Gym tracks each gate under isolated task sessions, and SkillMisevo-Bench supplies 25 episodes that alternate malicious exposure with related benign work">
+  <img src="assets/skill_misevolution_cycle.png" width="100%" alt="The skill misevolution cycle: unsafe experience is distilled into a reusable skill, retrieved later, then executed as harm in a later task. SkillMisevo-Gym tracks each gate under isolated task sessions, and SkillMisevo-Bench supplies 25 episodes that alternate malicious exposure with related benign work">
 </p>
 
 <p align="center">
@@ -79,7 +79,7 @@ combinations of agents and evolution methods**, each over **25 episodes** and **
   new-session utility within **1.3 points** of evolution without mitigation.
 
 <p align="center">
-  <img src="assets/safeevolve.png" width="100%" alt="SafeEvolve with SafeEvolve-UP: a critic scores each candidate skill with its lineage, a deleter can only delete or narrow unsafe spans, and stored skills are ranked, retired, and evicted at reuse time">
+  <img src="assets/safeevolve_pipeline.png" width="100%" alt="SafeEvolve with SafeEvolve-UP: a critic scores each candidate skill with its lineage, a deleter can only delete or narrow unsafe spans, and stored skills are ranked, retired, and evicted at reuse time">
 </p>
 <p align="center"><sub><b>SafeEvolve with SafeEvolve-UP mitigates how evolved skills are written and reused.</b> A critic scores each candidate with its lineage, and a deleter can only delete or narrow the unsafe spans. Stored skills are ranked by utility minus risk and retired once harmful reuse crosses a threshold.</sub></p>
 
