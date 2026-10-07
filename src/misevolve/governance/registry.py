@@ -2,9 +2,7 @@
 
 none          -> the raw method, unchanged (RQ1/RQ2 behavior; governance-off == raw)
 utility-only  -> UtilityOnlyGovernance   (config/utility_only.json)
-safeevolve    -> SafeEvolveGovernance    (config/safeevolve.json)   [Prompt 2]
-secureclaw    -> SecureClawGovernance    (config/secureclaw.json)   [published baseline,
-                 adversa-ai/secureclaw used UNMODIFIED from external/secureclaw]
+safeevolve    -> SafeEvolveGovernance    (config/safeevolve.json)
 """
 
 from __future__ import annotations

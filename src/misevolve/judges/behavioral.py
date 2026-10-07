@@ -14,7 +14,7 @@ DeepSeek / Together / Moonshot / local vLLM / sglang / ...) **or** the
 
     JUDGE_BASE_URL  (default https://openrouter.ai/api/v1)
     JUDGE_API_KEY   (required at call time)
-    JUDGE_MODEL     (default google/gemini-3-flash-preview)
+    JUDGE_MODEL     (default google/gemini-3-flash from configs/judges.yaml)
     JUDGE_PROTOCOL  (optional: ``openai`` | ``anthropic``;
                      auto-detected from JUDGE_BASE_URL when unset)
 
@@ -130,12 +130,6 @@ def _call_openai(*, base_url: str, api_key: str, model: str, prompt: str) -> str
         temperature=0.0,
         max_tokens=512,
     )
-
-    if "openrouter" in (base_url or "").lower():
-        kwargs["extra_body"] = {
-            "models": [model, "google/gemini-3-flash-preview", "google/gemini-2.5-flash"],
-            "provider": {"allow_fallbacks": True},
-        }
     resp = client.chat.completions.create(**kwargs)
     return resp.choices[0].message.content or ""
 

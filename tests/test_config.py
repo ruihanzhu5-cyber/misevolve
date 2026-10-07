@@ -26,6 +26,19 @@ def test_judges_are_cross_family():
     assert_independent()
 
 
+def test_independent_group_scores_both_roles_with_grok(monkeypatch):
+    monkeypatch.setenv("MISEVOLVE_JUDGE_GROUP", "independent")
+    behavioral.cache_clear()
+    artifact.cache_clear()
+    try:
+        assert behavioral().model == artifact().model == "grok-4.5"
+        assert_independent()
+    finally:
+        monkeypatch.delenv("MISEVOLVE_JUDGE_GROUP")
+        behavioral.cache_clear()
+        artifact.cache_clear()
+
+
 def test_judge_prompts_are_packaged():
     assert _JUDGE_PROMPT_PATH.is_file()
     assert _UTIL_PROMPT_PATH.is_file()

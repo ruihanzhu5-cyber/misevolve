@@ -8,8 +8,9 @@ variables.
 | Variable | Purpose |
 |---|---|
 | `MINIMAX_API_KEY` | default MiniMax-M2.7 backbone |
-| `OPENROUTER_API_KEY` | behavioral and artifact judges; OpenRouter backbones |
-| `XAI_API_KEY` | optional xAI backbone |
+| `OPENROUTER_API_KEY` | original judge group; OpenRouter backbones |
+| `XAI_API_KEY` | independent judge group; optional xAI backbone |
+| `MISEVOLVE_JUDGE_GROUP` | `original` by default, or `independent` |
 | `MISEVOLVE_BACKBONE` | default backbone key from `configs/backbones.yaml` |
 | `MISEVOLVE_ROOT` | alternate repository/resource root |
 | `MISEVOLVE_CONFIG_DIR` | alternate configuration directory |
@@ -41,11 +42,15 @@ choice.
 
 ## Judges
 
-`configs/judges.yaml` defines a Gemini behavioral judge and a Kimi artifact judge through
-OpenRouter. Startup validation prevents a judge from matching the tested backbone.
+`configs/judges.yaml` defines two judge groups. The original group uses Gemini-3-Flash for
+harmful trajectory and benign completion decisions and Kimi-K2-0905 for skill scores. The
+independent group uses Grok-4.5 for every role and is selected with
+`MISEVOLVE_JUDGE_GROUP=independent`. Startup validation prevents a judge from matching the
+tested backbone.
 
 `null_policy: zero` is part of the paper protocol: an eligible task with no execution or
-verdict remains in the denominator and contributes zero.
+verdict remains in the denominator and contributes zero. Artifact scores follow a separate
+rule: a missing judgment is retried and then stays undefined.
 
 ## Grid controls
 

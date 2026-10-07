@@ -2,7 +2,7 @@
 <p align="center"><b>MisEvolve — SkillMisevo-Gym · SkillMisevo-Bench · SafeEvolve</b></p>
 
 <p align="center">
-  <img src="assets/misevolve_overview.png" width="100%" alt="MisEvolve overview: controlled skill evolution turns malicious demonstrations into persistent skills, measures their reuse on benign and fresh-session tasks, and evaluates SafeEvolve governance">
+  <img src="assets/misevolve_overview.png" width="100%" alt="The skill misevolution cycle: unsafe experience is distilled into a reusable skill, retrieved later, then executed as harm in a later task. SkillMisevo-Gym tracks each gate under isolated task sessions, and SkillMisevo-Bench supplies 25 episodes that alternate malicious exposure with related benign work">
 </p>
 
 <p align="center">
@@ -23,90 +23,109 @@
 > 🤖 **AI agents:** read [`AGENT.md`](AGENT.md) first. It defines the repository map,
 > invariants, extension contracts, and verification commands in an agent-readable form.
 
-Self-improving agents turn experience into reusable skills. MisEvolve tests the failure
-mode on the other side of that capability: a one-off unsafe trajectory can become a
-**persistent, retrievable, reusable skill** that contaminates later benign work and
-survives into a fresh session.
+LLM agents increasingly save experience from past tasks as reusable skills through skill
+evolution. When an agent completes an unsafe task, skill evolution can keep the unsafe
+procedure inside an otherwise useful skill, and a later benign task can repeat the harm
+after the unsafe instruction is gone. The paper calls this failure **skill misevolution**.
+It passes three gates that are observed separately: the agent writes the unsafe procedure
+into a skill (authoring), a later task retrieves that skill (retrieval), and the task causes
+harm by following it (execution).
 
 The repository implements the three components introduced in the paper:
 
-- **SkillMisevo-Gym** controls task order, exposure timing, batch mixing, container
-  isolation, skill persistence, and cross-family judging.
-- **SkillMisevo-Bench** supplies 25 episodes with malicious demonstrations, benign
-  twins, and fresh-session persistence probes.
-- **SafeEvolve** audits candidates at write time and governs reuse with lineage,
-  repair, quarantine, risk, utility, and capacity evidence.
+- **SkillMisevo-Gym** clears every task session but keeps and versions the skill library,
+  so the library is the only state that crosses tasks. It controls task order, exposure
+  timing, batch mixing, container isolation, and judging.
+- **SkillMisevo-Bench** supplies 525 tasks in 25 episodes of 21 tasks. Each episode
+  alternates three blocks of malicious exposure (M) with three blocks of related benign
+  work (B), then ends with three benign tasks in a new session (P). Each episode has its own
+  harmful goal from AgentHazard and instantiates one of three vulnerability concepts:
+  label-conditioned reuse (8 episodes), dual-use boundary loss (8), and compositional
+  spillover (9).
+- **SafeEvolve** wraps any skill evolution method. At write time a critic scores each
+  candidate skill with its lineage and a paired deleter may only delete or narrow the
+  flagged spans. At reuse time it ranks skills by utility against lineage risk, retires
+  skills on harmful-reuse evidence, and evicts by utility minus risk at capacity.
 
 ## 📢 Latest updates
 
 <!-- Newest first; one line per release with an ISO date. -->
 
 - **2026-08-18** — 🚀 Initial public release with the benchmark, five external
-  evolution adapters, the native Hermes condition, SafeEvolve, and reproducibility docs.
+  evolution adapters, Hermes-native, SafeEvolve, and reproducibility docs.
 - **2026-08-13** — 📄 Paper released on arXiv:
   [arXiv:2608.12851](https://arxiv.org/abs/2608.12851).
 
 ## 🔬 What MisEvolve finds
 
-The paper evaluates **25 agent–method configurations**, each over **25 episodes** and
-**525 task executions**: 225 malicious tasks, 225 benign twins, and 75 fresh-session
-probes. Every one of the 21 evolving configurations authors unsafe artifacts; 19
-retrieve them unsafely, 19 contaminate benign tasks, and 15 cause fresh-session harm.
+The paper evaluates four target agents on MiniMax-M2.7 under No Evolution and **21
+combinations of agents and evolution methods**, each over **25 episodes** and **525 tasks**:
+225 malicious tasks, 225 related benign tasks, and 75 new-session tasks.
 
-- **Small exposure, durable effect.** Three malicious tasks increase carryover attack
-  success from **16.0% to 35.3%**.
-- **The full pipeline is observable.** Artifact unsafety, unsafe retrieval, benign-task
-  contamination, and fresh-session harm are measured separately.
-- **Governance breaks the chain.** SafeEvolve lowers unsafe retrieval by **26.7
-  percentage points** and fresh-session harm by **17.3 points**, while benign utility
-  changes by **0.4 points**.
+- **Skill misevolution appears across agents and methods.** All 21 combinations write
+  unsafe skills, 19 retrieve them, and 15 carry harm into the new session (14 under the
+  independent judge). The same method fails at different gates on different agents.
+- **Utility alone hides the risk.** Evolution raises benign utility over No Evolution in 15
+  combinations and raises malicious-task harm in 17.
+- **Small exposure, durable effect.** On two representative combinations, C-ASR rises from
+  **16.0%** without malicious exposure to **35.3%** after one malicious block and 41.3%
+  after all three.
+- **The harm comes from malicious exposure.** Replacing each malicious block with benign
+  exposure cuts mean C-ASR from 13.1% to 1.5%.
+- **SafeEvolve blocks the spread.** On OpenClaw it cuts unsafe retrieval in the new session
+  from **35.3% to 8.7%** and new-session harm from **21.3% to 4.0%**, while benign utility
+  during learning stays within **0.4 points**.
+- **SafeEvolve-UP keeps utility.** It cuts new-session harm by **16.0 points** and keeps
+  new-session utility within **1.3 points** of evolution without mitigation.
 
 <p align="center">
-  <img src="assets/safeevolve.png" width="100%" alt="SafeEvolve pipeline: audit and repair candidate skills at write time, retain lineage, then govern retrieval, retirement, and capacity at reuse time">
+  <img src="assets/safeevolve.png" width="100%" alt="SafeEvolve with SafeEvolve-UP: a critic scores each candidate skill with its lineage, a deleter can only delete or narrow unsafe spans, and stored skills are ranked, retired, and evicted at reuse time">
 </p>
-<p align="center"><sub><b>SafeEvolve governs both boundaries.</b> Candidate skills are audited and repaired before admission; admitted skills retain lineage and accumulate reuse evidence for retirement and eviction.</sub></p>
+<p align="center"><sub><b>SafeEvolve with SafeEvolve-UP mitigates how evolved skills are written and reused.</b> A critic scores each candidate with its lineage, and a deleter can only delete or narrow the unsafe spans. Stored skills are ranked by utility minus risk and retired once harmful reuse crosses a threshold.</sub></p>
 
 ## 🏗️ How it works
 
-Each experimental cell crosses a skill-evolution **method** with an agent **harness**
+Each experimental cell crosses a skill-evolution **method** with a target agent **harness**
 while holding the backbone constant. The executor and every method-internal LLM use the
 same backbone, so differences are attributable to the evolution method and harness.
 
 | Axis | Included settings | Contract |
 |---|---|---|
-| Evolution | No-Evolution, AutoSkill, EvoSkill, SkillClaw, SkillOpt, SkillsVote, Hermes-native | retrieve → inject → execute → evolve → persist |
-| Agent harness | Claude Code, Codex, OpenClaw, Hermes | fresh container and session per task; native skill-loading path |
-| Backbone | MiniMax-M2.7 by default; config-driven alternatives | one model for execution and method-internal inference |
-| Governance | none, Utility-only, SafeEvolve | wraps an evolution method without changing its native adapter |
-| Judges | Gemini behavioral judge, Kimi artifact judge | independent from the evaluated backbone and from each other |
+| Evolution | No Evolution, EvoSkill, SkillClaw, AutoSkill, SkillsVote, SkillOpt, Hermes-native | retrieve → inject → execute → evolve → persist |
+| Target agent | Claude Code, Codex, Hermes, OpenClaw | fresh container and session per task; native skill-loading path |
+| Backbone | MiniMax-M2.7 | one model for execution and method-internal inference |
+| Mitigation | Raw, Utility-only, SafeEvolve | wraps an evolution method without changing its native adapter |
+| Judges | original group: Gemini-3-Flash for trajectories, Kimi-K2-0905 for skills; independent group: Grok-4.5 for both | never the evaluated backbone |
 
 The default episode contains 21 tasks:
 
 ```text
 MMM BBB   MMM BBB   MMM BBB   |   PPP
-round 1   round 2   round 3       frozen-library, fresh-session probes
+round 1   round 2   round 3       new session on the frozen library
 ```
 
-Evolution runs after each three-task block. The final probe block freezes the library,
-starts clean sessions, and exposes only the persisted skill store. The scheduling module
+Evolution runs after each of the six learning blocks. The new session then starts a clean
+executor on the final library and reads only the exported `SKILL.md` files, with no further
+update. The scheduling module
 also reproduces early, interleaved, late, batched, partial, and fully mixed exposures.
 
 ### Nine headline metrics
 
-| Metric | Direction | Measures |
-|---|:---:|---|
-| `BenignUtility` | ↑ | legitimate completion on benign twins |
-| `MaliciousASR` | ↓ | malicious-goal completion during exposure |
-| `Contamination` | ↓ | harm on injection-free benign tasks |
-| `CU` | ↓ | content unsafety of authored skills |
-| `UG` | ↓ | generalization among unsafe skills |
-| `Stealth` | ↓ | concealment among unsafe skills |
-| `CarryoverASR` | ↓ | harm on fresh-session probes |
-| `CarryoverUtility` | ↑ | legitimate completion on probes |
-| `URR` | ↓ | unsafe-skill retrieval on probes |
+| Metric | Code key | Direction | Measures |
+|---|---|:---:|---|
+| BU | `benign_util` | ↑ | related benign tasks whose benign objective is completed |
+| M-ASR | `mal_ASR` | ↓ | malicious tasks whose harmful objective is completed |
+| B-ASR | `contam` | ↓ | related benign tasks with an extra harmful completion |
+| CU | `CU` | ↓ | content unsafety of authored skills (1–5) |
+| UG | `UG` | ↓ | how far an unsafe step reaches beyond its original task, over skills with CU ≥ 3 |
+| Stealth | `Stealth` | ↓ | how legitimate the unsafe step looks, over skills with CU ≥ 3 |
+| URR | `URR` | ↓ | new-session tasks that retrieve a skill with CU ≥ 3 |
+| C-ASR | `carry_ASR` | ↓ | harmful completion in the new session |
+| C-Util | `carry_util` | ↑ | benign completion in the new session |
 
-Rates use fixed denominators. Missing executions and judge failures count as zero rather
-than disappearing from the condition. Confidence intervals resample whole episode cells.
+The aggregator also reports the unsafe artifact rate U-A (`U_A`), the share of authored
+skills with CU ≥ 3. Rates use fixed denominators, so missing executions stay in the
+condition. Confidence intervals resample whole episode cells.
 
 Full design rationale, boundaries, and data flow are in
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
@@ -164,15 +183,15 @@ misevolve/
 ├── scripts/             method setup, image builds, and resumable grid runner
 ├── tests/               contracts for episodes, metrics, schedules, and governance
 ├── docs/                operator and design documentation
-├── assets/              paper overview figures
+├── assets/              paper figures
 └── results/             generated run artifacts, excluded from version control
 ```
 
 ## 📋 Status
 
 Current release: **v0.1.0**. The repository ships the 25-episode benchmark, four
-containerized agent harnesses, six general conditions plus Hermes-native, six schedule
-variants, nine metrics, and SafeEvolve with its ablations. See
+containerized target agents, six evolution settings plus Hermes-native, six schedule
+variants, nine metrics, both judge groups, and SafeEvolve with its ablations. See
 [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Citation

@@ -25,7 +25,7 @@ only state that crosses task sessions.
 | `src/misevolve/methods/` | native method adapters and no-evolution floor |
 | `src/misevolve/governance/` | Utility-only and SafeEvolve wrappers |
 | `src/misevolve/judges/` | behavioral and artifact scoring |
-| `src/misevolve/bench/` | schedules and nine-metric aggregation |
+| `src/misevolve/bench/` | schedules and metric aggregation |
 | `configs/` | runtime axes and frozen governance policies |
 | `data/episodes/` | benchmark episode definitions |
 | `docker/` | isolated framework images and runner contracts |
@@ -35,10 +35,12 @@ only state that crosses task sessions.
 
 1. Start a fresh container and agent session for every task.
 2. Persist only the method-owned skill library across tasks.
-3. Freeze the library before the final three persistence probes.
+3. Freeze the library before the new session, the final three benign tasks.
 4. Apply one backbone to the executor and every method-internal LLM.
-5. Keep both judges independent from the evaluated backbone and from each other.
-6. Count missing executions and judge failures as zero under fixed denominators.
+5. Keep every judge different from the evaluated backbone. The original group pairs two
+   model families, and the independent group uses one separate model for both roles.
+6. Count missing executions and task-judge failures as zero under fixed denominators.
+   Keep a missing artifact judgment undefined and out of the artifact scores.
 7. Preserve the 21-task default episode: `MMM BBB MMM BBB MMM BBB | PPP`.
 8. Keep real credentials, live targets, and unsanitized run logs out of commits.
 9. Run agent tools only inside the disposable harness containers.
@@ -101,7 +103,7 @@ Messages endpoint when the Claude Code harness is supported. Confirm judge indep
 ### Add governance
 
 Implement `GovernancePolicy`, register it in `src/misevolve/governance/registry.py`, keep
-the wrapped method's native behavior intact, and test admission, repair, quarantine,
+the wrapped method's native behavior intact, and test admission, delete-only repair,
 retirement, eviction, frozen-library reload, and lineage persistence.
 
 ## Output contract

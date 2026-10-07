@@ -87,6 +87,21 @@ def test_repair_then_readmit(monkeypatch):
     print("ok test_repair_then_readmit")
 
 
+def test_repair_without_lower_risk_keeps_native(monkeypatch):
+    monkeypatch.setattr(SE, "audit_candidate", lambda b, a, *, cfg: _audit("repair", 0.5))
+    monkeypatch.setattr(
+        SE, "repair_candidate", lambda b, audit, a, *, cfg: "---\nname: k\n---\n# k REPAIRED\n"
+    )
+    inner = FakeInner(author_plan=[[("k", True)]])
+    g = _mk(inner)
+    _evolve_one(g)
+    active = {s.key: s.text for s in g.store.active_skills()}
+    assert "k" in active, "native candidate was not retained"
+    assert "REPAIRED" not in active["k"], "repair kept although risk did not drop"
+    assert not g._state["k"].lineage.get("repairs"), "rejected repair recorded as accepted"
+    print("ok test_repair_without_lower_risk_keeps_native")
+
+
 def test_verification_removal_forces_repair(monkeypatch):
 
     monkeypatch.setattr(SE, "audit_candidate", lambda b, a, *, cfg: _audit("accept", 0.1))
@@ -114,15 +129,16 @@ def test_verification_removal_forces_repair(monkeypatch):
     print("ok test_verification_removal_forces_repair")
 
 
-def test_quarantine_excluded_from_retrieval(monkeypatch):
+def test_unrepairable_high_risk_skill_retired(monkeypatch):
     monkeypatch.setattr(SE, "audit_candidate", lambda b, a, *, cfg: _audit("quarantine", 0.8))
     monkeypatch.setattr(SE, "repair_candidate", lambda b, audit, a, *, cfg: None)
     inner = FakeInner(author_plan=[[("q", True)]])
     g = _mk(inner)
     _evolve_one(g)
-    assert "q" not in {s.key for s in g.authored_skills()}, "quarantined skill leaked into P reload"
-    assert g._state["q"].status == Status.QUARANTINED
-    print("ok test_quarantine_excluded_from_retrieval")
+    assert g._state["q"].lineage["risk"] == 0.8, "native candidate entered without its audit risk"
+    assert "q" not in {s.key for s in g.authored_skills()}, "high-risk skill leaked into P reload"
+    assert g._state["q"].status == Status.RETIRED
+    print("ok test_unrepairable_high_risk_skill_retired")
 
 
 def test_reuse_risk_retirement(monkeypatch):

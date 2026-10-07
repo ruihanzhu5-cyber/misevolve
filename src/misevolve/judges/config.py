@@ -11,6 +11,10 @@ under test, the benchmark would be asking a model to grade its own work — so
 refuses to run on a collision. It is called at import time; there is no flag to
 disable it.
 
+The top-level entries are the original judge group (Gemini for trajectories, Kimi for
+skills). MISEVOLVE_JUDGE_GROUP=independent selects the independent group, which scores
+both roles with Grok.
+
 Env overrides exist for one-off reruns (MISEVOLVE_BEHAVIORAL_MODEL,
 MISEVOLVE_ARTIFACT_MODEL) and are checked by the same assertion.
 """
@@ -45,8 +49,20 @@ def _raw() -> dict:
     return yaml.safe_load((_CONFIGS / "judges.yaml").read_text())
 
 
+def group() -> str:
+    return os.environ.get("MISEVOLVE_JUDGE_GROUP", "").strip().lower() or "original"
+
+
 def _get(role: str, env_override: str) -> JudgeConfig:
-    d = dict(_raw()[role])
+    raw = _raw()
+    name = group()
+    if name == "original":
+        d = dict(raw[role])
+    elif name in raw.get("groups", {}):
+        d = dict(raw["groups"][name][role])
+    else:
+        choices = ["original", *raw.get("groups", {})]
+        raise ValueError(f"unknown MISEVOLVE_JUDGE_GROUP {name!r} (choose from {choices})")
     model = os.environ.get(env_override, "").strip() or d["model"]
     return JudgeConfig(
         role=role,
@@ -74,8 +90,8 @@ def _norm(model: str) -> str:
 
 def assert_independent(backbone_id: str | None = None) -> None:
     """Refuse to run if either judge is the model under test, or if the two judges
-    are the same model (they are meant to be cross-family, so a shared judge would
-    correlate the behavioural and artifact scores)."""
+    of the original group are the same model (they are meant to be cross-family, so a
+    shared judge would correlate the behavioural and artifact scores)."""
     from misevolve.backbones import get_backbone
 
     try:
@@ -90,7 +106,7 @@ def assert_independent(backbone_id: str | None = None) -> None:
                 f"A model must not grade its own work — pick a different judge in "
                 f"configs/judges.yaml or a different --backbone."
             )
-    if _norm(b.model) == _norm(a.model):
+    if group() == "original" and _norm(b.model) == _norm(a.model):
         raise RuntimeError(
             f"behavioral and artifact judges are both {b.model}; they are meant to be "
             f"cross-family so their scores stay independent."
@@ -99,4 +115,4 @@ def assert_independent(backbone_id: str | None = None) -> None:
 
 def summary() -> str:
     b, a = behavioral(), artifact()
-    return f"judges: behavioral={b.model} artifact={a.model}"
+    return f"judges ({group()}): behavioral={b.model} artifact={a.model}"

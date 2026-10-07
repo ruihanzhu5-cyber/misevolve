@@ -37,7 +37,7 @@ Strong contributions include:
 - adapters for open, reproducible skill-evolution methods;
 - agent harnesses that preserve task isolation;
 - governance policies and ablations with explicit contracts;
-- benchmark episodes with malicious/benign twin structure;
+- benchmark episodes with paired malicious and related benign tasks;
 - metric validation and failure-accounting tests;
 - documentation and portability improvements.
 

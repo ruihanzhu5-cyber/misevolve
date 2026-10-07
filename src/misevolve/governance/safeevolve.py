@@ -1,22 +1,23 @@
-"""SafeEvolve governance policy (paper RQ3).
+"""SafeEvolve governance policy (paper RQ3, Algorithm 1).
 
-Safety-aware governance at the write + reuse boundaries, sharing SafeEvolve's hooks /
-budget / capacity / cadence with the Utility-only control but ALSO using safety evidence:
+Safety-aware governance at the write and reuse boundaries, sharing its hooks, budget,
+capacity, and cadence with the Utility-only control but also using safety evidence:
 
-  WRITE-TIME (decide_admission):
-    1. an INDEPENDENT admission critic (audit.py) audits the complete candidate bundle;
-    2. verification-preservation (lineage.py) is checked against the ancestor and OVERRIDES
-       a lenient "accept" — a revision that silently drops a requirement is repaired/quarantined;
-    3. accept (low risk, preserved) -> admit; otherwise targeted repair (repair.py) then
-       RE-AUDIT (the wrapper loops up to max_repair_attempts) -> admit if it now passes,
-       else quarantine; reject only structural/unsalvageable.
+  WRITE-TIME (decide_admission, driven by the wrapper in base.py):
+    1. a non-blocking critic (audit.py) audits the complete candidate with its lineage and
+       returns a risk score with the unsafe spans;
+    2. verification preservation (lineage.py) against the ancestor counts as a finding;
+    3. a paired deleter (repair.py) may only delete or narrow the flagged spans. The wrapper
+       re-audits each repair for at most two rounds and keeps it only when it stays valid with
+       lower risk. Otherwise the native candidate enters the library with its audit attached.
   REUSE-TIME (choose_retirements / choose_evictions):
-    combine benign utility with frozen provenance risk + accumulated unsafe-reuse evidence
-    to retire / downweight risky skills; capacity eviction prefers useful & low-risk skills.
+    retrieval risk is attributed to retrieved skills. A skill retires after two harmful reuses,
+    once effective risk reaches the threshold, or when utility stays low. Capacity eviction
+    removes the skill with the lowest utility minus risk.
 
 The library keeps lineage (ancestor, exposure, audits, repairs, risk, status) for every
-admitted skill; the minimal lineage is embedded in SKILL.md frontmatter so it survives the
-clean P reload.
+admitted skill. The minimal lineage is embedded in SKILL.md frontmatter so it survives the
+clean reload for the new session.
 """
 
 from __future__ import annotations
@@ -53,27 +54,20 @@ class SafeEvolveGovernance(GovernancePolicy):
             "verification_required": sorted(verification_signals(cand.bundle.text)),
         }
 
-        if decision == "accept" and ver_ok and risk < self.cfg.admission_risk_threshold:
+        if decision == "accept" and ver_ok:
             return AdmissionDecision(DecisionKind.ADMIT, reason="audit-accept", risk=risk, audit=audit_rec)
 
         if self.cfg.extra.get("disable_paired_deleter", False):
             return AdmissionDecision(DecisionKind.ADMIT, reason="audit-retain-no-deleter", risk=risk, audit=audit_rec)
 
-        if decision == "reject":
-            return AdmissionDecision(DecisionKind.REJECT, reason="audit-reject", risk=risk, audit=audit_rec)
-
         if self.can_repair and not self.cfg.extra.get("disable_repair", False):
             repaired = repair_candidate(cand.bundle, audit, anc, cfg=self.cfg)
             if repaired and repaired.strip() and repaired != cand.bundle.text:
-                why = (
-                    "audit-repair"
-                    if decision == "repair"
-                    else ("verification-restore" if not ver_ok else "risk-repair")
-                )
+                why = "verification-restore" if not ver_ok else "audit-delete"
                 return AdmissionDecision(
                     DecisionKind.REPAIR, reason=why, repaired_text=repaired, risk=risk, audit=audit_rec
                 )
-        return AdmissionDecision(DecisionKind.QUARANTINE, reason="unrepairable-risk", risk=risk, audit=audit_rec)
+        return AdmissionDecision(DecisionKind.ADMIT, reason="audit-retain-native", risk=risk, audit=audit_rec)
 
     def choose_evictions(self, actives: list[Candidate], capacity: int) -> list[str]:
         if len(actives) <= capacity:
@@ -81,7 +75,7 @@ class SafeEvolveGovernance(GovernancePolicy):
 
         def rank(c: Candidate):
             risk = float(c.lineage.get("risk", 0.0) or 0.0)
-            return (c.utility_score - 0.5 * risk, c.age, c.bundle.key)
+            return (c.utility_score - risk, c.age, c.bundle.key)
 
         order = sorted(actives, key=rank)
         return [c.bundle.key for c in order[: len(actives) - capacity]]

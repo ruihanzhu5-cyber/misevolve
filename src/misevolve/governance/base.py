@@ -214,7 +214,6 @@ class GovernanceConfig:
     beta: float = 1.0
     cadence_blocks: int = 1
 
-    admission_risk_threshold: float = 0.5
     reuse_risk_threshold: float = 0.6
     max_repair_attempts: int = 2
     extra: dict[str, Any] = field(default_factory=dict)
@@ -393,37 +392,50 @@ class GovernedMethodHarness(harness.MethodHarness):
             ancestor_text=(ancestor_text if ancestor_text is not None else st.lineage.get("ancestor_text")),
             ancestor_id=(bundle.key if ancestor_text else st.lineage.get("ancestor_id")),
         )
-        for attempt in range(self.cfg.max_repair_attempts + 1):
-            sig = self._signal(bundle, native_valid, st)
-            dec = self.policy.decide_admission(sig)
-            if dec.audit:
-                st.audits.append(dec.audit)
+        dec = self.policy.decide_admission(self._signal(bundle, native_valid, st))
+        if dec.audit:
+            st.audits.append(dec.audit)
+        if dec.kind == DecisionKind.REJECT:
             if dec.risk is not None:
                 st.lineage["risk"] = dec.risk
-            if dec.kind == DecisionKind.ADMIT:
-                self._transition(st, Status.ACTIVE, dec.reason or "admitted")
-                break
-            if dec.kind == DecisionKind.REJECT:
-                self.store.set_skill_status(bundle.key, Status.RETIRED)
-                self._transition(st, Status.RETIRED, dec.reason or "rejected(invalid)")
-                break
-            if dec.kind == DecisionKind.QUARANTINE:
-                self.store.set_skill_status(bundle.key, Status.QUARANTINED)
-                self._transition(st, Status.QUARANTINED, dec.reason or "quarantined")
-                break
-            if dec.kind == DecisionKind.REPAIR and dec.repaired_text is not None:
-                self.store.replace_skill(bundle.key, dec.repaired_text, dec.repaired_files)
-                st.lineage.setdefault("repairs", []).append(
-                    {"attempt": attempt, "reason": dec.reason, "sha_before": bundle.sha()}
-                )
-                bundle = SkillBundle(bundle.key, dec.repaired_text, dec.repaired_files or {}, bundle.version)
-                st.lineage["sha"] = bundle.sha()
-                continue
-
+            self.store.set_skill_status(bundle.key, Status.RETIRED)
+            self._transition(st, Status.RETIRED, dec.reason or "rejected(invalid)")
+            self._enforce_capacity()
+            return
+        if dec.kind == DecisionKind.QUARANTINE:
+            if dec.risk is not None:
+                st.lineage["risk"] = dec.risk
             self.store.set_skill_status(bundle.key, Status.QUARANTINED)
-            self._transition(st, Status.QUARANTINED, "repair-exhausted")
+            self._transition(st, Status.QUARANTINED, dec.reason or "quarantined")
+            self._enforce_capacity()
+            return
+
+        current, current_risk, repaired = bundle, dec.risk, False
+        for attempt in range(self.cfg.max_repair_attempts):
+            if dec.kind != DecisionKind.REPAIR or dec.repaired_text is None:
+                break
+            candidate = SkillBundle(bundle.key, dec.repaired_text, dec.repaired_files or {}, bundle.version)
+            self.store.replace_skill(candidate.key, candidate.text, candidate.referenced_files)
+            candidate_valid = self.store.is_valid(candidate.key)
+            re_audit = self.policy.decide_admission(self._signal(candidate, candidate_valid, st))
+            if re_audit.audit:
+                st.audits.append(re_audit.audit)
+            lower_risk = (
+                re_audit.risk is not None and current_risk is not None and re_audit.risk < current_risk
+            )
+            if candidate_valid and lower_risk:
+                st.lineage.setdefault("repairs", []).append(
+                    {"attempt": attempt, "reason": dec.reason, "sha_before": current.sha()}
+                )
+                current, current_risk, dec, repaired = candidate, re_audit.risk, re_audit, True
+                st.lineage["sha"] = current.sha()
+                continue
+            self.store.replace_skill(current.key, current.text, current.referenced_files)
             break
 
+        if current_risk is not None:
+            st.lineage["risk"] = current_risk
+        self._transition(st, Status.ACTIVE, "repaired" if repaired else (dec.reason or "admitted"))
         self._enforce_capacity()
 
     def _maintain(self) -> None:

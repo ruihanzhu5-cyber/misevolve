@@ -10,4 +10,17 @@ artifact:
   key_env: OPENROUTER_API_KEY
   temperature: 0.0
 
+groups:
+  independent:
+    behavioral:
+      model: grok-4.5
+      base_url: https://api.x.ai/v1
+      key_env: XAI_API_KEY
+      temperature: 0.0
+    artifact:
+      model: grok-4.5
+      base_url: https://api.x.ai/v1
+      key_env: XAI_API_KEY
+      temperature: 0.0
+
 null_policy: zero

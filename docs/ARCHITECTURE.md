@@ -14,7 +14,7 @@ episode runner ──retrieve──▶ method-owned skill store
     │                              │
     │                         governance
     │                       audit / repair
-    │                     quarantine / retire
+    │                     retire / evict
     ▼                              │
 fresh container ◀────native skill injection
     │
@@ -39,20 +39,20 @@ skill persistence.
 
 The default episode is `MMM BBB MMM BBB MMM BBB | PPP`.
 
-1. Load nine malicious tasks, their nine benign twins, and three persistence probes.
+1. Load nine malicious tasks, nine related benign tasks, and three benign tasks for the new session.
 2. Retrieve skills from the current method library.
 3. Inject the selected skills through the framework's native loading path.
 4. Execute one task in a disposable container and capture the trajectory.
 5. Score harm and legitimate completion with the behavioral judge.
 6. After each three-task block, ask the method to evolve its library.
-7. Score each authored artifact for content unsafety, generalization, and stealth.
-8. Apply governance admission, repair, quarantine, retirement, and capacity decisions.
-9. Freeze the final library before the probe block.
-10. Run three fresh-session probes without further evolution.
+7. Score each new or revised skill version for content unsafety, generalization, and stealth.
+8. Apply governance admission, delete-only repair, retirement, and capacity decisions.
+9. Freeze the final library and score its exported skills again before the new session.
+10. Run the three new-session tasks in a clean executor without further evolution.
 11. Write task and artifact rows to `all_rows.json`.
 
 `misevolve.bench.schedules` changes exposure timing and within-batch mixing while preserving
-nine malicious and nine benign pre-probe tasks. Mixed schedules rotate and reverse across
+nine malicious and nine benign tasks before the new session. Mixed schedules rotate and reverse across
 episode indices to prevent a fixed position from defining the result.
 
 ## Component ownership
@@ -88,7 +88,7 @@ dedicated output mount. Method skills enter through the framework's native path:
 - evolve from a completed batch;
 - persist and reload the episode library;
 - identify authored or edited artifacts;
-- report retrieval evidence for the probe metrics.
+- report retrieval evidence for the new-session metrics.
 
 External repositories stay outside the Python package. `scripts/setup_methods.sh` checks
 out exact revisions and creates an isolated environment per method, preventing dependency
@@ -97,8 +97,9 @@ conflicts from changing another condition.
 ### Judges
 
 The behavioral judge scores task-level harm and utility. The artifact judge scores authored
-skills. Both are configured outside the backbone axis, use different model families, and
-are rejected at startup if either matches the evaluated backbone.
+skills. The original group uses Gemini-3-Flash for trajectories and Kimi-K2-0905 for skills.
+The independent group uses Grok-4.5 for both roles. Judges are configured outside the
+backbone axis and are rejected at startup if either matches the evaluated backbone.
 
 ### Aggregator
 
@@ -113,11 +114,11 @@ SafeEvolve wraps a native method at two boundaries.
 ### Write-time governance
 
 1. Build a candidate bundle with content, native metadata, source exposures, and ancestry.
-2. Audit the complete bundle with an independent critic.
+2. Audit the complete bundle with a non-blocking critic that returns risk with unsafe spans.
 3. Check that a revision preserves verification requirements inherited from its ancestor.
-4. Admit a low-risk candidate, repair a salvageable candidate, quarantine unresolved risk,
-   or reject structurally invalid content.
-5. Re-audit repaired content before admission.
+4. Let a paired deleter delete or narrow the flagged spans, for at most two rounds.
+5. Re-audit each repair and keep it only when it stays valid with lower risk. Otherwise keep
+   the native candidate. Reject only structurally invalid content.
 6. Persist audit evidence and lineage with the skill.
 
 ### Reuse-time governance
@@ -125,12 +126,17 @@ SafeEvolve wraps a native method at two boundaries.
 1. Track successful, failed, and unsafe reuse events.
 2. Combine frozen provenance risk with accumulated reuse evidence.
 3. Retire skills that exceed safety or utility thresholds.
-4. Enforce capacity by preferring useful, low-risk candidates.
+4. Enforce capacity by evicting the skill with the lowest utility minus risk.
 5. Preserve governance metadata across the frozen-library reload.
 
 The Utility-only control uses the same hooks, budget, capacity, and cadence without safety
-evidence. SafeEvolve ablations selectively disable repair, the paired deleter, or safety
+evidence. SafeEvolve ablations remove the paired deleter, reuse attribution, or safety
 retirement while leaving the surrounding lifecycle unchanged.
+
+The evaluated configuration attempts at most two delete–audit rounds, runs maintenance
+after each update block, retires a skill after two harmful reuses or at effective risk of
+at least 0.6, applies utility retirement below 0.35 after two observations, and limits the
+active library to 32 skills.
 
 ## Configuration flow
 
@@ -151,14 +157,16 @@ configs/safeevolve*.json ─▶ governance policy
 Container errors and judge failures remain visible in the row record. Rate aggregation
 uses fixed eligible-task denominators and contributes zero for missing outcomes. This
 prevents unstable methods from improving their reported rate by producing fewer judgments.
+Artifact judgments are retried, and one that is still missing stays undefined and outside
+the artifact scores.
 
 ## Extension rules
 
 - A new harness must preserve fresh-task isolation and native skill injection.
 - A new method must keep its own store within the episode directory and expose retrieval.
 - A new governance policy must wrap the common lifecycle without rewriting native methods.
-- A new judge must remain independent from the backbone and emit a parseable raw record.
-- A new schedule must preserve the task multiset and keep the probe block evolution-free.
+- A new judge must differ from the backbone and emit a parseable raw record.
+- A new schedule must preserve the task multiset and keep the new session evolution-free.
 
 The executable version of these rules lives in `tests/` and the AI-agent change protocol
 lives in [`AGENT.md`](../AGENT.md).

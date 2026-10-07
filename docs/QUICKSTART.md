@@ -9,7 +9,8 @@ aggregates its output.
 - `uv`
 - Docker with enough capacity for one selected agent image
 - a MiniMax API key for the default backbone
-- an OpenRouter API key for the independent judges
+- an OpenRouter API key for the original judge group
+- an xAI API key when scoring with the independent judge group
 
 ## 1. Install
 
@@ -114,8 +115,9 @@ The main-table command reports the nine metrics and episode-level bootstrap inte
 bash scripts/run_main_table.sh
 ```
 
-The default matrix contains 25 episodes and 25 method–agent configurations: six general
-conditions crossed with four harnesses, plus Hermes-native on Hermes. This produces 625
+The default matrix contains 25 episodes and 25 conditions: No Evolution and five evolution
+methods crossed with four target agents, plus Hermes-native on Hermes. Of these, 21 are
+combinations of an agent with an evolution method and 4 are No Evolution. This produces 625
 episode cells and 13,125 task executions before retries.
 
 Use environment variables to narrow the matrix:
