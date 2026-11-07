@@ -27,6 +27,7 @@ DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
 DEEPSEEK_PRICE = "https://api-docs.deepseek.com/zh-cn/quick_start/pricing/"
 PRICE_DATE = "2026-11-07"
 INPUT_BYTES = 256_000
+BEHAVIOR_INPUT_BYTES = 2_000_000
 OPENCLAW_INPUT_BYTES = 8 * 1024 * 1024
 OPENCLAW_STREAM_BYTES = 128 * 1024 * 1024
 OPENCLAW_CONTEXT = 204800
@@ -204,7 +205,8 @@ class ProviderCalls:
             raise ProviderError("invalid max_tokens")
         payload = {**payload, "max_tokens": limit if executor else min(limit, max_output)}
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        input_limit = OPENCLAW_INPUT_BYTES if executor else INPUT_BYTES
+        input_limits = {"openclaw": OPENCLAW_INPUT_BYTES, "behavior_judge": BEHAVIOR_INPUT_BYTES}
+        input_limit = input_limits.get(module, INPUT_BYTES)
         response_limit = OPENCLAW_STREAM_BYTES if executor else 2_000_000
         if len(body) > input_limit:
             raise ProviderError("input exceeds Stage 7 request limit")

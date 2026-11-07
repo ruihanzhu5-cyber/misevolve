@@ -11,10 +11,17 @@ from misevolve._stage7_openclaw import Stage7Runner, _Relay, execution_evidence,
 from misevolve.adapters.openclaw_runner import OpenClawRunner
 from misevolve.multiagent._io import append_jsonl, read_jsonl
 from misevolve.paths import repo_root
-from misevolve.stage7 import _benign_tasks, _complete_smoke, _judge, preflight
+from misevolve.stage7 import _behavior_prompt, _benign_tasks, _complete_smoke, _judge, preflight
 
 
-def test_provider_attempts_record_usage_once_and_stop_after_auth_failure(tmp_path, monkeypatch):
+@pytest.mark.parametrize(("first_error", "first_status", "first_http"), [
+    (None, "http_error", 429),
+    (TimeoutError, "timeout", None),
+    (ConnectionResetError, "transport_error", None),
+])
+def test_provider_attempts_record_usage_once_and_stop_after_auth_failure(
+    tmp_path, monkeypatch, first_error, first_status, first_http,
+):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "synthetic-key")
     monkeypatch.setattr("misevolve._stage7_api.time.sleep", lambda _: None)
     requests = []
@@ -26,6 +33,8 @@ def test_provider_attempts_record_usage_once_and_stop_after_auth_failure(tmp_pat
     class Opener:
         def open(self, request, **kwargs):
             requests.append(json.loads(request.data))
+            if len(requests) == 1 and first_error:
+                raise first_error
             if len(requests) in (1, 3):
                 status = 429 if len(requests) == 1 else 401
                 raise HTTPError(request.full_url, status, "PRIVATE_HTTP_ERROR", {}, io.BytesIO())
@@ -45,11 +54,15 @@ def test_provider_attempts_record_usage_once_and_stop_after_auth_failure(tmp_pat
         calls.request(Scope("three", "A"), "behavior_judge", payload)
     assert len(requests) == 3 and all(request["max_tokens"] == 768 for request in requests)
     attempts = read_jsonl(calls.path)
-    assert [row["http_status"] for row in attempts] == [429, 200, 401]
+    assert [row["http_status"] for row in attempts] == [first_http, 200, 401]
+    assert [row["status"] for row in attempts] == [first_status, "ok", "http_error"]
     assert [row["attempt"] for row in attempts] == [1, 2, 1]
     assert attempts[0]["call_id"] == attempts[1]["call_id"]
     assert attempts[1]["request_id"] == "synthetic-request"
     assert calls.summary()["input_tokens_reported"] == 10
+    assert calls.summary()["provider_retries"] == 1
+    assert calls.summary()["provider_timeouts"] == int(first_status == "timeout")
+    assert calls.summary()["provider_transport_errors"] == int(first_status == "transport_error")
     assert calls.summary()["cost_estimate_cny"] == pytest.approx(0.00002804)
     assert "PRIVATE_PROMPT" not in calls.path.read_text() and "synthetic-key" not in calls.path.read_text()
 
@@ -231,6 +244,16 @@ def test_invalid_judge_schema_is_not_a_verdict(tmp_path, module, verdict):
     assert read_jsonl(path)[0]["verdict"] is None
 
 
+def test_stage7_behavior_judge_retains_final_deliverable_after_long_tool_output():
+    history = [
+        {"message": {"role": "toolResult", "content": [{"type": "text", "text": "example" * 42_000}]}},
+        {"message": {"role": "assistant", "content": [{"type": "text", "text": "Final evidence."}]}},
+    ]
+    prompt = _behavior_prompt("Synthetic task", history)
+    evidence = prompt.split("\n\nTRAJECTORY\n", 1)[1]
+    assert json.loads(evidence) == history
+
+
 def test_tool_round_trip_requires_matching_tool_result_and_followup():
     def event(role, text, **extra):
         return {"message": {"role": role, "content": [{"type": "text", "text": text}], **extra}}
@@ -265,6 +288,9 @@ def test_stage7_smoke_requires_task_success_and_native_retrieval_and_injection()
     assert not _complete_smoke(rows, [first, second])
     rows[2]["task_success"] = True
     assert _complete_smoke(rows, [first, second])
+    rows[2]["behavior_judge_valid"] = False
+    assert not _complete_smoke(rows, [first, second])
+    rows[2]["behavior_judge_valid"] = True
     rows[1]["injected"][0]["resolution_status"] = "unknown"
     assert not _complete_smoke(rows, [first, second])
 

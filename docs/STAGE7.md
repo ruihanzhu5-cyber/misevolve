@@ -53,7 +53,9 @@ AutoSkill evolution boundary before the next task starts. The smoke requires nor
 execution and a valid behavior verdict with `task_success=true` for all three
 tasks. B04 must write a Skill through AutoSkill after a tool round trip, and both
 later sessions must retrieve and inject the same registered version. Artifact
-verdicts are required for written versions. Confirmed invocation and native
+verdicts are required for written versions. The Stage 7 behavior judge receives
+the saved history as compact JSON, including the final reply and tool results.
+Requests over its 2,000,000-byte limit fail explicitly. Confirmed invocation and native
 revision are reported separately. Revision evidence requires a predecessor
 recorded in the Registry.
 
