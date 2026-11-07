@@ -11,6 +11,7 @@ from misevolve.bench.metrics import is_artifact, is_benign, is_malicious, is_per
 from misevolve.multiagent._io import atomic_json, read_jsonl
 from misevolve.multiagent.episode import SCHEDULE, WORKERS, run_episode
 from misevolve.multiagent.exchange import skill_reference
+from misevolve.multiagent.models import UnsupportedSkillError
 from misevolve.multiagent.orchestrator import MultiAgentOrchestrator
 from misevolve.multiagent.provenance import ProvenanceTracker
 from misevolve.multiagent.registry import GlobalSkillRegistry
@@ -43,7 +44,7 @@ def _scores(text):
 def scenario(tmp_path, episode, monkeypatch, runner_factory, method_factory, synthetic_llm):
     runners, methods, llm = {}, {}, {}
     executions, evolutions, searches, seen_imports = [], [], [], []
-    faults = {"runner_raise": None, "runner_error": None, "empty": False, "ingest": False}
+    faults = {"runner_raise": None, "runner_error": None, "empty": False, "ingest": False, "resource": False}
     expected = {task["pos"]: task for task in episode["task_sequence"]}
     run_dir = tmp_path / "run"
 
@@ -107,6 +108,29 @@ def scenario(tmp_path, episode, monkeypatch, runner_factory, method_factory, syn
         def enable_with_fakes(worker_id):
             enable(worker_id)
             llm[worker] = synthetic_llm(method)
+            if faults["resource"] and worker == "A":
+                llm_extract = method.sdk.extractor._llm.complete
+                llm_maintain = method.sdk.maintainer._llm.complete
+
+                def with_resource(**kw):
+                    data = json.loads(llm_extract(**kw))
+                    if llm[worker]["extract_calls"] == 3:
+                        data["skills"][0].update({
+                            "name": "synthetic-music", "description": "Transcribe a short synthetic melody.",
+                            "prompt": "# Goal\nWrite the pitches and durations in a melody.",
+                            "triggers": ["melody transcription"], "tags": ["music"],
+                            "files": {"scripts/synthetic.sh": "# synthetic resource\n"},
+                        })
+                    return json.dumps(data)
+
+                monkeypatch.setattr(method.sdk.extractor._llm, "complete", with_resource)
+
+                def separate_capability(*, system, **kw):
+                    if llm[worker]["extract_calls"] == 3 and "capability identity judge" in system:
+                        return '{"same_capability":false,"confidence":1.0}'
+                    return llm_maintain(system=system, **kw)
+
+                monkeypatch.setattr(method.sdk.maintainer._llm, "complete", separate_capability)
             if faults["empty"]:
                 monkeypatch.setattr(method.sdk.extractor._llm, "complete", lambda **kw: '{"skills":[]}')
             if faults["ingest"]:
@@ -347,8 +371,8 @@ def test_integrity_failure_stops_episode(episode, scenario, monkeypatch, phase):
     assert progress["last_task"]["execution_index"] == metrics["attempted_tasks"]
 
 
-@pytest.mark.parametrize("stop_at, committed_batches", [(2, 0), (11, 3)])
-def test_continue_from_stopped_task_without_replaying_committed_work(episode, scenario, stop_at, committed_batches):
+@pytest.mark.parametrize("stop_at, committed_batches, resource_stop", [(2, 0, False), (11, 3, False), (4, 0, True)])
+def test_continue_without_replaying_committed_work(episode, scenario, stop_at, committed_batches, resource_stop):
     pool = scenario["pool"]
     source = pool.run_dir.parent / "source"
     pool.run_dir = source / "episode"
@@ -360,8 +384,10 @@ def test_continue_from_stopped_task_without_replaying_committed_work(episode, sc
             atomic_json(interrupted / "partial.json", {"task_run_id": run_id})
             raise KeyboardInterrupt
 
-    with pytest.raises(KeyboardInterrupt):
+    scenario["faults"]["resource"] = resource_stop
+    with pytest.raises(UnsupportedSkillError if resource_stop else KeyboardInterrupt):
         run_episode(episode, pool, judge=_verdict, content_judge=_scores, before_task=stop)
+    scenario["faults"]["resource"] = False
     previous_rows = read_json(pool.run_dir / "all_rows.json")
     previous_events = read_jsonl(pool.run_dir / "episode_events.jsonl")
     atomic_json(source / "run_manifest.json", {
@@ -372,9 +398,13 @@ def test_continue_from_stopped_task_without_replaying_committed_work(episode, sc
     atomic_json(source / "run.exit", 1)
     checkpoint, metadata = stage7_pilot._continuation(source, episode)
     assert (metadata["retained_tasks"], metadata["retained_batches"]) == (stop_at - 1, committed_batches)
-    assert checkpoint.interrupted["execution_index"] == stop_at
+    if resource_stop:
+        assert checkpoint.interrupted is None and len(checkpoint.pending_evolution) == 3
+        assert metadata["unsupported_resource_recovery"]
+    else:
+        assert checkpoint.interrupted["execution_index"] == stop_at
     stage7_pilot._copy_checkpoint(source, continuation, checkpoint)
-    assert not list(continuation.rglob("partial.json")) and len(list(source.rglob("partial.json"))) == 1
+    assert not list(continuation.rglob("partial.json")) and bool(list(source.rglob("partial.json"))) != resource_stop
 
     scenario["runners"].clear()
     scenario["methods"].clear()
@@ -389,8 +419,16 @@ def test_continue_from_stopped_task_without_replaying_committed_work(episode, sc
     assert Counter(event["event"] for event in events)["evolution_batch"] == 6
     assert [(event["worker_id"], event["target_worker_id"]) for event in events
             if event["event"] == "block_transfer"] == ROUTE
-    first = next(row for row in rows if row.get("execution_index") == stop_at)
-    assert first["task_run_id"] != checkpoint.interrupted["task_run_id"]
+    if resource_stop:
+        rejection, = read_jsonl(restarted.run_dir / "resource_rejections.jsonl")
+        assert rejection["local_skill_id"] == metadata["unsupported_resource_recovery"]["local_skill_id"]
+        assert list(source.rglob("synthetic.sh")) and not list(continuation.rglob("synthetic.sh"))
+        assert not any(row.get("orig_id") == rejection["local_skill_id"] for row in rows)
+        native = read_jsonl(restarted.run_dir / "workers/A/evolution_events.jsonl")
+        assert native[:3] == checkpoint.pending_evolution and len(native) == 9
+    else:
+        first = next(row for row in rows if row.get("execution_index") == stop_at)
+        assert first["task_run_id"] != checkpoint.interrupted["task_run_id"]
 
 
 @pytest.mark.parametrize("field", ["pos", "instance_id", "kind", "task_count"])

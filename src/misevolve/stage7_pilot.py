@@ -313,12 +313,17 @@ def _continuation(source, episode, manifest=None):
     checkpoint = load_checkpoint(source / "episode", *_plan(episode))
     for name in ("model_calls.jsonl", "judge_results.jsonl"):
         read_jsonl(source / name)
+    rejected = checkpoint.pending_evolution[-1] if checkpoint.pending_evolution else None
     return checkpoint, {
         "source_directory": str(source), "source_run_id": previous["run_id"], "source_code_sha": previous["code_sha"],
         "source_task_timeout_seconds": previous["configuration"]["task_timeout_seconds"],
         "source_continuation": previous.get("continuation"),
         "retained_tasks": len(checkpoint.tasks), "retained_batches": checkpoint.completed_batches,
         "first_execution_index": len(checkpoint.tasks) + 1, "interrupted_attempt": checkpoint.interrupted,
+        "unsupported_resource_recovery": ({
+            "worker_id": rejected["worker_id"], "task_run_id": rejected["task"]["task_run_id"],
+            "local_skill_id": rejected["updated_local_skill_ids"][0], "event_id": rejected["event_id"],
+        } if rejected else None),
     }
 
 
@@ -416,6 +421,7 @@ def _pilot_summary(root, calls, started, *, error=None, continuation=None):
         "technical_acceptance": "passed" if technical else "incomplete", "issues": issues,
         "attempted_tasks": len(tasks), "elapsed_seconds": round(time.monotonic() - started, 3),
         "continuation": continuation,
+        "unsupported_resource_rejections": read_jsonl(episode / "resource_rejections.jsonl"),
         "completed_hops": completed_hops, "tasks": tasks, "api": attempts,
         "error_type": type(error).__name__ if error is not None else None,
     })

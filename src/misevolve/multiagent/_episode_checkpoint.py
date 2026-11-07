@@ -14,6 +14,28 @@ class EpisodeCheckpoint:
     completed_batches: int
     last_task: dict | None
     interrupted: dict | None
+    pending_evolution: list[dict] | None
+
+
+def _unsupported_addition(directory, batch, task_rows):
+    events = read_jsonl(directory / "workers" / batch.worker_id / "evolution_events.jsonl")
+    ids = [row["task_run_id"] for row in task_rows if row["runner_success"]]
+    pending = [event for event in events if event["task"]["task_run_id"] in ids]
+    if not pending or [event["task"]["task_run_id"] for event in pending] != ids:
+        raise ValueError("unsupported addition did not occur after the last required ingest")
+    if any(event["worker_id"] != batch.worker_id for event in pending) or any(
+        previous["after"] != following["before"] for previous, following in zip(pending, pending[1:], strict=False)
+    ):
+        raise ValueError("native ingest snapshots are discontinuous")
+    failed = pending[-1]
+    returned = failed["returned_skills"]
+    if (any(event["success"] is not True for event in pending[:-1]) or failed["success"] is not False
+            or failed["error"] is not None or failed["after"] or len(returned) != 1
+            or not failed.get("snapshot_error", "").startswith("UnsupportedSkillError: unsupported resource file ")
+            or failed["updated_local_skill_ids"] != [returned[0]["id"]]
+            or returned[0]["id"] in failed["before"] or not (set(returned[0]["files"]) - {"SKILL.md"})):
+        raise ValueError("checkpoint cannot isolate one newly created Skill with unsupported resources")
+    return pending
 
 
 def _verify_transfers(directory, routes):
@@ -48,7 +70,11 @@ def load_checkpoint(directory: Path, plan: dict, batches) -> EpisodeCheckpoint:
     if read("episode_plan.json") != plan:
         raise ValueError("checkpoint episode plan differs from the requested plan")
     progress = read("progress.json")
-    if progress["phase"] != "incomplete" or progress.get("failed_phase") not in {"task_execution", "task_finished"}:
+    resource_stop = (progress.get("failed_phase") == "native_evolution"
+                     and progress.get("error_type") == "UnsupportedSkillError")
+    if progress["phase"] != "incomplete" or not (
+        resource_stop or progress.get("failed_phase") in {"task_execution", "task_finished"}
+    ):
         raise ValueError("continuation requires a stopped task boundary outside evolution, transfer and probe capture")
     rows = read("all_rows.json")
     tasks = [row for row in rows if row["kind"] != "artifact"]
@@ -66,6 +92,7 @@ def load_checkpoint(directory: Path, plan: dict, batches) -> EpisodeCheckpoint:
     batches_done = 0
     native_ids, artifact_ids, routes = [], set(), []
     probes = iter(read_jsonl(directory / "probe_snapshots.jsonl"))
+    pending_evolution = None
 
     for batch in batches:
         batch_ids = []
@@ -105,6 +132,12 @@ def load_checkpoint(directory: Path, plan: dict, batches) -> EpisodeCheckpoint:
                     native_ids.extend(event["evolution_event_ids"])
                     artifact_ids.update(event["global_skill_ids"])
                 event = next(commits, None)
+                if name == "evolution_started" and event is None and resource_stop and len(finished) == len(tasks):
+                    pending_evolution = _unsupported_addition(directory, batch, tasks[-len(batch_ids):])
+                    native_ids.extend(item["event_id"] for item in pending_evolution)
+                    break
+            if pending_evolution:
+                break
             if batch.target:
                 if (event is None or event["event"] != "block_transfer" or event["block_id"] != batch.block_id
                         or event["worker_id"] != batch.worker_id or event["target_worker_id"] != batch.target):
@@ -121,11 +154,11 @@ def load_checkpoint(directory: Path, plan: dict, batches) -> EpisodeCheckpoint:
     if (event is not None or next(probes, None) is not None or len(finished) != len(tasks)
             or sorted(native_ids) != sorted(actual_native)
             or len(artifact_ids) != len(actual_artifacts) or set(actual_artifacts) != artifact_ids
-            or not artifact_ids <= registered):
+            or artifact_ids != registered or resource_stop != bool(pending_evolution)):
         raise ValueError("checkpoint journals contain uncommitted work")
     last = progress["last_task"]
     if bool(last) != bool(finished) or (last and last["task_run_id"] != finished[-1]):
         raise ValueError("checkpoint last task disagrees with committed rows")
     pending = [row for run_id, row in starts.items()
                if run_id not in finished and row["execution_index"] == len(tasks) + 1]
-    return EpisodeCheckpoint(rows, tasks, batches_done, last, pending[-1] if pending else None)
+    return EpisodeCheckpoint(rows, tasks, batches_done, last, pending[-1] if pending else None, pending_evolution)

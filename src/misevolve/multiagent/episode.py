@@ -130,6 +130,46 @@ def _restore_trace(worker, task, row):
     return trajectory, TaskOutcome(row["attack_success"], row["task_success"])
 
 
+def _discard_unsupported_addition(worker, rejected, journal):
+    from autoskill.management.formats.agent_skill import load_agent_skill_dir
+
+    exchange = worker.method._exchange
+    sdk = worker.method.sdk
+    candidate, = rejected["returned_skills"]
+    local_id = candidate["id"]
+    resources = {path: data for path, data in candidate["files"].items() if path != "SKILL.md"}
+    user_root = Path(sdk.store.path) / "Users" / exchange.user_id
+    matches = []
+    for markdown in user_root.glob("*/SKILL.md"):
+        skill = load_agent_skill_dir(str(markdown.parent), user_id=exchange.user_id, include_files=False)
+        if skill.id == local_id:
+            matches.append(markdown.parent)
+    live_ids = {skill.id for skill in sdk.list(user_id=exchange.user_id)}
+    if len(matches) != 1 or live_ids != set(rejected["before"]) | {local_id}:
+        raise ValueError("copied native Store does not match the rejected resource addition")
+    root, = matches
+    files = {path.relative_to(root).as_posix(): path for path in root.rglob("*") if path.is_file()}
+    if set(files) != set(candidate["files"]) or any(
+        files[name].read_text(encoding="utf-8") != data.replace("\r\n", "\n").replace("\r", "\n")
+        for name, data in resources.items()
+    ):
+        raise ValueError("copied unsupported resources differ from the native ingest result")
+
+    def content(snapshots):
+        return {key: {field: value for field, value in bundle.items() if field != "native_metadata"}
+                for key, bundle in snapshots.items()}
+
+    if (not sdk.delete(local_id) or sdk.get(local_id) is not None
+            or content(exchange.snapshot_store()) != content(rejected["before"])):
+        raise ValueError("could not isolate the unsupported addition from the supported native versions")
+    append_jsonl(journal, {
+        "event": "unsupported_resource_rejected", "reason": "pilot_supports_only_SKILL.md",
+        "worker_id": worker.worker_id, "task_run_id": rejected["task"]["task_run_id"],
+        "local_skill_id": local_id, "source_ingest_event_id": rejected["event_id"],
+        "resource_count": len(resources), "resource_suffixes": sorted({Path(name).suffix for name in resources}),
+    })
+
+
 def _task_row(
     episode: dict, task: dict, entry: dict, worker: WorkerRuntime, judge: JudgeFn,
     frozen: _FrozenLibrary | None, task_run_id: str, *, judge_failed: bool,
@@ -304,6 +344,8 @@ def run_episode(
                     next(entries)
                 continue
             worker = workers[batch.worker_id]
+            pending_evolution = (checkpoint.pending_evolution
+                                 if checkpoint and batch_index == checkpoint.completed_batches else None)
             kind = batch.tasks[0]["kind"]
             if kind == "P" and not frozen:
                 mark("freeze_libraries")
@@ -319,9 +361,10 @@ def run_episode(
                     row = saved_tasks[entry["execution_index"] - 1]
                     task_run_ids.append(row["task_run_id"])
                     if row["runner_success"]:
-                        trace, outcome = _restore_trace(worker, task, row)
-                        traces.append(trace)
-                        outcomes.append(outcome)
+                        if not pending_evolution:
+                            trace, outcome = _restore_trace(worker, task, row)
+                            traces.append(trace)
+                            outcomes.append(outcome)
                         if before_task:
                             before_task(worker, entry, row["task_run_id"])
                     continue
@@ -364,12 +407,16 @@ def run_episode(
                 continue
 
             mark("native_evolution", worker_id=batch.worker_id, block_id=batch.block_id, task_run_ids=task_run_ids)
-            append_jsonl(checkpoint_path, {
-                "event": "evolution_started", "worker_id": batch.worker_id, "block_id": batch.block_id,
-                "task_run_ids": task_run_ids,
-            })
-            worker.method.evolve_batch(traces, outcomes, kind=kind, round_idx=batch.tasks[0]["round"])
-            events = worker.method._last_evolution_events
+            if pending_evolution:
+                _discard_unsupported_addition(worker, pending_evolution[-1], run_dir / "resource_rejections.jsonl")
+                events = pending_evolution
+            else:
+                append_jsonl(checkpoint_path, {
+                    "event": "evolution_started", "worker_id": batch.worker_id, "block_id": batch.block_id,
+                    "task_run_ids": task_run_ids,
+                })
+                worker.method.evolve_batch(traces, outcomes, kind=kind, round_idx=batch.tasks[0]["round"])
+                events = worker.method._last_evolution_events
             mark("registry_registration", worker_id=batch.worker_id, block_id=batch.block_id)
             versions = registry.register_evolution_events(worker.worker_id, events, block_id=batch.block_id)
             for artifact in versions:
