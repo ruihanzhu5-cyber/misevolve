@@ -7,10 +7,12 @@ import json
 import os
 import platform
 import secrets
+import shutil
 import signal
 import subprocess
 import time
 from collections import Counter
+from contextlib import contextmanager
 from hashlib import sha256
 from importlib.metadata import version
 from pathlib import Path
@@ -44,21 +46,32 @@ TRANSFER_RULE = {
 }
 
 _READ_TRANSCRIPT = """
-import json
-import sys
-from pathlib import Path
-
-root = (Path.home() / ".openclaw/agents/main/sessions").resolve()
-entry = json.loads((root / "sessions.json").read_text())[sys.argv[1]]
-path = Path(entry.get("sessionFile") or (entry["sessionId"] + ".jsonl"))
-path = (root / path).resolve()
-if not path.is_relative_to(root) or not path.is_file():
-    raise ValueError("session transcript is outside its store")
-with path.open("rb") as handle:
-    data = handle.read(int(sys.argv[2]) + 1)
-if len(data) > int(sys.argv[2]):
-    raise ValueError("session transcript exceeds capture limit")
-sys.stdout.buffer.write(data)
+const { DatabaseSync } = require("node:sqlite");
+const { zstdDecompressSync } = require("node:zlib");
+const { homedir } = require("node:os");
+const [key, limit] = process.argv.slice(1);
+const db = new DatabaseSync(homedir() + "/.openclaw/agents/main/agent/openclaw-agent.sqlite", {readOnly: true});
+db.exec("BEGIN");
+const row = db.prepare("SELECT current_session_id FROM session_nodes WHERE session_key = ?").get(key);
+if (!row?.current_session_id) throw new Error("OpenClaw session not found");
+const windows = db.prepare("SELECT session_id FROM session_windows WHERE session_key = ?").all(key);
+if (windows.length !== 1 || windows[0].session_id !== row.current_session_id) {
+    throw new Error("OpenClaw session has multiple or unknown transcript generations");
+}
+if (db.prepare("SELECT 1 FROM session_transcript_cold_archives WHERE session_id = ?").get(row.current_session_id)) {
+    throw new Error("OpenClaw session has an archived transcript");
+}
+let bytes = 0;
+const events = db.prepare("SELECT event_json, event_zstd FROM transcript_events WHERE session_id = ? ORDER BY seq");
+for (const event of events.iterate(row.current_session_id)) {
+    const text = event.event_zstd ? zstdDecompressSync(event.event_zstd).toString("utf8") : event.event_json;
+    if (typeof text !== "string") throw new Error("OpenClaw transcript event has no data");
+    bytes += Buffer.byteLength(text) + 1;
+    if (bytes > Number(limit)) throw new Error("OpenClaw transcript exceeds capture limit");
+    process.stdout.write(text + "\\n");
+}
+db.exec("COMMIT");
+db.close();
 """
 
 
@@ -71,18 +84,30 @@ def _decode_history(data: str) -> list[dict]:
     messages = [row for row in records if row.get("type") == "message"]
     if not messages or any(not isinstance(row.get("message"), dict) for row in messages):
         raise ValueError("missing or invalid OpenClaw messages")
-    return messages
+    return records
 
 
 class PilotRunner(Stage7Runner):
+    def _container_options(self):
+        return [*super()._container_options(), "--dns", "127.0.0.1",
+                "--sysctl", "net.ipv6.conf.all.disable_ipv6=1"]
+
     def _http(self, method, path, body=None, *, timeout):
         if method != "GET" or not path.startswith("/sessions/") or not path.endswith("/history"):
             return super()._http(method, path, body, timeout=timeout)
         session_id = path.split("/")[2]
         result = self._docker([
-            "exec", self.container, "python3", "-c", _READ_TRANSCRIPT,
+            "exec", self.container, "node", "-e", _READ_TRANSCRIPT,
             f"agent:main:stage7-{session_id}", str(HISTORY_BYTES),
-        ], timeout=CAPTURE_TIMEOUT)
+        ], timeout=CAPTURE_TIMEOUT, check=False)
+        if result.returncode:
+            failures = {
+                "exceeds capture limit": "transcript_capture_limit",
+                "archived transcript": "transcript_archived",
+                "transcript generations": "transcript_generation_mismatch",
+            }
+            raise ValueError(next((kind for text, kind in failures.items() if text in result.stderr),
+                                  "native transcript capture failed"))
         (self._task_dir / "session_raw.jsonl").write_text(result.stdout, encoding="utf-8", newline="\n")
         history = _decode_history(result.stdout)
         return 200, {"history": history}
@@ -135,6 +160,41 @@ class PilotRunner(Stage7Runner):
                 self._rm_container()
 
 
+@contextmanager
+def _pilot_relay(calls):
+    with isolated_relay(calls) as (network, relay):
+        info = json.loads(OpenClawRunner._docker(["network", "inspect", network]).stdout)[0]
+        if info["Driver"] != "bridge" or info.get("EnableIPv6"):
+            raise ValueError("the pilot requires an IPv4-only internal bridge")
+        bridge = (info.get("Options") or {}).get("com.docker.network.bridge.name") or f"br-{info['Id'][:12]}"
+        address, port = relay.server_address
+        interface = ["-i", bridge]
+        rules = [
+            [*interface, "-j", "DROP"],
+            [*interface, "-d", address, "-p", "tcp", "--dport", str(port), "-j", "ACCEPT"],
+            [*interface, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"],
+        ]
+        applied = []
+
+        def firewall(*args):
+            subprocess.run(["iptables", "-w", "5", *args], check=True, capture_output=True, timeout=15)
+
+        try:
+            for rule in rules:
+                firewall("-I", "INPUT", "1", *rule)
+                applied.append(rule)
+            yield network, relay
+        finally:
+            errors = []
+            for rule in reversed(applied):
+                try:
+                    firewall("-D", "INPUT", *rule)
+                except (OSError, subprocess.SubprocessError) as exc:
+                    errors.append(exc)
+            if errors:
+                raise ExceptionGroup("pilot bridge firewall cleanup failed", errors)
+
+
 def _episode_and_plan():
     path = repo_root() / "data/episodes/episodes_directive.json"
     dataset = path.read_bytes()
@@ -163,6 +223,8 @@ def _configuration(calls, proof_path: Path):
         raise ValueError("matching Stage 7.0 acceptance evidence is required")
     if _git("status", "--porcelain", "--untracked-files=no"):
         raise ValueError("the pilot requires a clean tracked checkout")
+    if os.name != "posix" or os.geteuid() != 0 or not shutil.which("iptables"):
+        raise ValueError("the isolated pilot requires Linux root and iptables")
     overrides = [key for key in (
         "SKILLMISEVO_DEFENSE_SKILL_DIR", "OPENCLAW_EXTRA_PLUGINS", "AUTOSKILL_HINT", "AUTOSKILL_TOP_K",
         "AUTOSKILL_LLM_MODEL", "AUTOSKILL_LLM_BASE_URL", "AUTOSKILL_LLM_MAX_TOKENS",
@@ -194,6 +256,7 @@ def _configuration(calls, proof_path: Path):
             "domain": episode["task_domain"], "surface": episode["task_surface"],
             "hazard_category": episode["hazard_category"], "workspace": "fresh_image_workspace",
             "host_mounts": False, "external_network": False, "external_fixtures": False,
+            "bridge_host_access": "model_relay_and_replies_to_host_initiated_connections",
         },
         "transfer_rule": TRANSFER_RULE, "routes": ROUTE,
         "judges": {
@@ -325,7 +388,7 @@ def pilot(calls, root, episode, manifest):
 
     print(json.dumps(manifest["configuration"], sort_keys=True), flush=True)
     try:
-        with isolated_relay(calls) as (network, relay):
+        with _pilot_relay(calls) as (network, relay):
             pool = MultiAgentOrchestrator(root / "episode", backbone=BACKBONE,
                                           runner_factory=lambda *_: PilotRunner(network, relay))
             run_episode(episode, pool, judge=judge, content_judge=None, before_task=before_task,

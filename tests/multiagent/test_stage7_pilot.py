@@ -1,6 +1,7 @@
 import json
 from contextlib import contextmanager
 from hashlib import sha256
+from types import SimpleNamespace
 
 import pytest
 
@@ -23,7 +24,7 @@ def test_published_plan_and_full_history():
     ] + [{"type": "message", "message": {"role": "assistant", "content": "FINAL_TOOL_EVIDENCE"}}]
     text = "".join(json.dumps(row) + "\n" for row in raw)
     history = stage7_pilot._decode_history(text)
-    assert len(history) == 106 and history[-1]["message"]["content"] == "FINAL_TOOL_EVIDENCE"
+    assert len(history) == 107 and history[-1]["message"]["content"] == "FINAL_TOOL_EVIDENCE"
     with pytest.raises(ValueError, match="incomplete"):
         stage7_pilot._decode_history(text[:-1])
     for kind, modules in (("M", ["harm_judge"]), ("B", ["harm_judge", "utility_judge"]),
@@ -80,7 +81,7 @@ def test_mock_pilot_attributes_each_call_and_accepts_empty_transfers(tmp_path, m
         mock.run = execute
         return mock
 
-    monkeypatch.setattr(stage7_pilot, "isolated_relay", offline_relay)
+    monkeypatch.setattr(stage7_pilot, "_pilot_relay", offline_relay)
     monkeypatch.setattr(stage7_pilot, "PilotRunner", runner)
     episode, _, _ = stage7_pilot._episode_and_plan()
     assert stage7_pilot.pilot(calls, tmp_path, episode, {"configuration": {}})
@@ -108,3 +109,25 @@ def test_status_preserves_complete_records_before_a_torn_tail(tmp_path):
     counts = next(iter(report["durable_events"].values()))
     assert counts == {"task_finished": 1, "incomplete_tail": 1}
     assert next(iter(report["latest_checkpoints"].values()))["execution_index"] == 8
+
+
+def test_pilot_firewall_is_bridge_scoped_and_cleaned_on_failure(monkeypatch):
+    @contextmanager
+    def relay(_calls):
+        yield "test-bridge", SimpleNamespace(server_address=("172.28.0.1", 8123))
+
+    monkeypatch.setattr(stage7_pilot, "isolated_relay", relay)
+    info = [{"Driver": "bridge", "EnableIPv6": False, "Id": "123456789abc000", "Options": {}}]
+    monkeypatch.setattr(stage7_pilot.OpenClawRunner, "_docker",
+                        lambda *a: SimpleNamespace(stdout=json.dumps(info)))
+    commands = []
+    monkeypatch.setattr(stage7_pilot.subprocess, "run", lambda args, **kw: commands.append(args))
+    with pytest.raises(RuntimeError, match="synthetic"):
+        with stage7_pilot._pilot_relay(None):
+            assert len(commands) == 3
+            raise RuntimeError("synthetic")
+    inserted = [command[6:] for command in commands[:3]]
+    removed = [command[5:] for command in commands[3:]]
+    assert inserted[::-1] == removed
+    assert all(rule[:2] == ["-i", "br-123456789abc"] for rule in inserted)
+    assert "--dport" in inserted[1] and "8123" in inserted[1]

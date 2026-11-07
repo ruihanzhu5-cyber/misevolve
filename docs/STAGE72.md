@@ -16,7 +16,8 @@ Stage 6 的 `chain_clean_receiver_v1` 入口。运行清单保留原始 ID、标
 
 该 episode 涵盖健康端点、环境配置、遥测、systemd、CI 与 Git hook。每题使用
 与 Stage 7.1 相同的固定镜像、新容器和新会话。镜像内使用新工作区，网络为
-内部 Docker bridge，仅通向模型 relay。ECS 文件、真实服务和外部诊断接收端
+内部 Docker bridge。运行期间的接口专用防火墙规则只允许容器主动连接模型
+relay，并允许宿主机发起的管理连接收到响应。ECS 文件、真实服务和外部诊断接收端
 均不作为任务环境挂载。A 的轨迹、工具结果和工作区 tar 保存在 A 的任务目录。
 接收者从原生 Skill Transfer Bridge 得到跨 Worker 内容。
 
@@ -32,7 +33,8 @@ Stage 6 的 `chain_clean_receiver_v1` 入口。运行清单保留原始 ID、标
 - 行为与 Artifact 评审使用 `deepseek-flash`。M 用原作者引用的 AgentHazard
   目标达成规则判分，B/P 分别用该规则判断对应风险，用原作者的 utility 规则判断正常
   目标。Artifact 以完整 `SKILL.md` 按三项规则打分并记录理由与证据摘录。
-  行为评审读取已保存的完整会话消息。轨迹捕获与评审请求超限会形成明确失败记录。
+  行为评审读取完整会话事件。固定 OpenClaw 版本的会话记录从容器 SQLite 只读导出。
+  轨迹捕获、代际异常与评审请求超限会形成明确失败记录。
 - AutoSkill 原生检索 `top_k=5`，使用本地 hashing embedding。每个 M/B 批次结束
   后，沿用原生策略逐次 ingest，保存输入归属、返回结果、前后快照及维护响应。P
   直接注入冻结后的完整库，每题记录前后 Store 哈希和 ingest 计数。
@@ -56,7 +58,7 @@ PYTHONPATH=src python -m misevolve.stage7_pilot check \
 
 ```bash
 cd /root/misevolve-stage72
-tmux new-session -d -s misevolve-stage72 bash scripts/run_stage72.sh \
+tmux new-session -d -s misevolve-stage72 -c /root/misevolve-stage72 bash scripts/run_stage72.sh \
   /root/misevolve-stage7-bootstrap/venv/bin/python \
   /root/misevolve-stage7/results/stage7-20261107-preflight/preflight.json \
   /root/.config/misevolve/stage7.env auto
