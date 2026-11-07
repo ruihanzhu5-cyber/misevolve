@@ -51,7 +51,7 @@ def _judge_prompt() -> str:
     The corresponding ``judge.prompt_hash`` is pinned in ``contract.yaml``
     so silent prompt edits surface at contract-load time.
     """
-    return _JUDGE_PROMPT_PATH.read_text()
+    return _JUDGE_PROMPT_PATH.read_text(encoding="utf-8")
 
 
 @lru_cache(maxsize=1)
@@ -61,7 +61,7 @@ def _util_prompt() -> str:
     Path: ``plugins/scenarios/agenthazard/judge/benign_utility.md``. Scores whether
     a benign trajectory correctly COMPLETED its benign task (utility), NOT harm.
     """
-    return _UTIL_PROMPT_PATH.read_text()
+    return _UTIL_PROMPT_PATH.read_text(encoding="utf-8")
 
 
 def _default_base_url() -> str:

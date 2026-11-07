@@ -238,7 +238,7 @@ print(json.dumps({
         stream = attempts[-1].get("stream") or {}
         if not stream.get("message_stop") or not any(block["argument_error"] for block in stream["tool_blocks"]):
             return None
-        code, data = super()._http("GET", f"/sessions/{session_id}/history", timeout=60)
+        code, data = self._http("GET", f"/sessions/{session_id}/history", timeout=60)
         if code != 200 or not isinstance(data, dict):
             return None
         return tool_correction(stream, data.get("history") or [])

@@ -65,6 +65,7 @@ class AutoSkillExchange:
         self.imports: dict[str, dict] = {}
         self.origins: dict[str, dict] = {}
         self.events: list[dict] = []
+        self.before_ingest = None
         self.evolution_path = self.episode_dir / "evolution_events.jsonl"
         self.task_path = self.episode_dir / "task_events.jsonl"
         if self.state_path.exists():
@@ -187,6 +188,8 @@ class AutoSkillExchange:
             ],
         }
         try:
+            if self.before_ingest:
+                self.before_ingest(task)
             updated = self.sdk.ingest(**kwargs)
             event["returned_skills"] = [json.loads(canonical_json(asdict(s))) for s in updated or []]
             event["updated_local_skill_ids"] = [s.id for s in updated or []]

@@ -10,7 +10,7 @@ import urllib.request
 import uuid
 from collections import Counter
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from hashlib import sha256
 from http.client import IncompleteRead
 from io import BytesIO
@@ -40,6 +40,8 @@ LIMITS = {
     "extractor": (2, 4096),
     "maintainer": (4, 4096),
     "behavior_judge": (1, 768),
+    "harm_judge": (1, 768),
+    "utility_judge": (1, 768),
     "artifact_judge": (4, 768),
 }
 
@@ -52,9 +54,26 @@ class Scope:
 
 
 class ProviderError(RuntimeError):
-    def __init__(self, reason: str, status: int | None = None):
+    def __init__(self, reason: str, status: int | None = None, *, category="provider_error"):
         super().__init__(reason)
         self.status = status
+        self.category = category
+
+
+def _weekday_peak(instant: datetime) -> bool:
+    china = instant.astimezone(timezone(timedelta(hours=8)))
+    return china.weekday() < 5 and (9 <= china.hour < 12 or 14 <= china.hour < 18)
+
+
+def _http_error_kind(exc):
+    if exc.code in (400, 413, 422):
+        # Provider error bodies can echo the request. Keep only the classification.
+        body = exc.read(8192).decode("utf-8", errors="replace").lower()
+        if exc.code == 413 or any(value in body for value in (
+            "context_length_exceeded", "context length", "context window", "maximum context",
+        )):
+            return "context_limit"
+    return "http_error"
 
 
 def _number(value):
@@ -179,7 +198,7 @@ def _estimate(usage: dict, *, deepseek: bool, peak: bool) -> float | None:
 
 
 class ProviderCalls:
-    def __init__(self, run_dir: Path, *, deepseek_peak: bool):
+    def __init__(self, run_dir: Path, *, deepseek_peak: bool | None):
         self.path = run_dir / "model_calls.jsonl"
         self.run_id = run_dir.name
         self.deepseek_peak = deepseek_peak
@@ -191,6 +210,11 @@ class ProviderCalls:
         missing = [name for name in ("MINIMAX_API_KEY", "DEEPSEEK_API_KEY") if not os.environ.get(name, "").strip()]
         if missing:
             raise ValueError(f"missing credentials: {', '.join(missing)}")
+
+    @property
+    def authentication_failed(self) -> bool:
+        with self._lock:
+            return self._auth_failed
 
     def request(self, scope: Scope, module: str, payload: dict, *, correction=None) -> tuple[bytes, str]:
         max_calls, max_output = LIMITS[module]
@@ -205,11 +229,12 @@ class ProviderCalls:
             raise ProviderError("invalid max_tokens")
         payload = {**payload, "max_tokens": limit if executor else min(limit, max_output)}
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        input_limits = {"openclaw": OPENCLAW_INPUT_BYTES, "behavior_judge": BEHAVIOR_INPUT_BYTES}
+        input_limits = dict.fromkeys(("behavior_judge", "harm_judge", "utility_judge"), BEHAVIOR_INPUT_BYTES)
+        input_limits["openclaw"] = OPENCLAW_INPUT_BYTES
         input_limit = input_limits.get(module, INPUT_BYTES)
         response_limit = OPENCLAW_STREAM_BYTES if executor else 2_000_000
         if len(body) > input_limit:
-            raise ProviderError("input exceeds Stage 7 request limit")
+            raise ProviderError("input exceeds Stage 7 request limit", category="input_limit")
         key = os.environ[f"{provider.upper()}_API_KEY"].strip()
         url = DEEPSEEK_URL if deepseek else MINIMAX_URL
         request = urllib.request.Request(url, data=body, headers={
@@ -232,7 +257,8 @@ class ProviderCalls:
             usage = {}
             stream = {} if executor else None
             elapsed = time.monotonic()
-            start = datetime.now(UTC).isoformat()
+            started = datetime.now(UTC)
+            peak = _weekday_peak(started) if self.deepseek_peak is None else self.deepseek_peak
             try:
                 with opener.open(request, timeout=REQUEST_TIMEOUT) as response:
                     status = response.status
@@ -247,21 +273,25 @@ class ProviderCalls:
             except urllib.error.HTTPError as exc:
                 status = exc.code
                 request_id = exc.headers.get("request-id") or exc.headers.get("x-request-id")
-                exc.close()
-                error = "http_error"
+                try:
+                    error = _http_error_kind(exc)
+                except (OSError, IncompleteRead):
+                    error = "http_error"
+                finally:
+                    exc.close()
             except (TimeoutError, urllib.error.URLError, ConnectionError, IncompleteRead) as exc:
                 reason = getattr(exc, "reason", exc)
                 error = "timeout" if isinstance(reason, TimeoutError) else "transport_error"
             except (ValueError, TypeError, KeyError, AttributeError, ProviderError):
                 error = "invalid_response"
 
-            cost = _estimate(usage, deepseek=deepseek, peak=self.deepseek_peak)
+            cost = _estimate(usage, deepseek=deepseek, peak=peak)
             row = {
                 "run_id": self.run_id, "task_id": scope.task_id, "worker_id": scope.worker_id,
                 "instance_id": scope.instance_id,
                 "module": module, "provider": provider, "model": model, "response_model": response_model,
                 "call_id": call_id, "attempt": attempt, "request_id": request_id,
-                "started_at": start, "elapsed_seconds": round(time.monotonic() - elapsed, 4),
+                "started_at": started.isoformat(), "elapsed_seconds": round(time.monotonic() - elapsed, 4),
                 "status": error or "ok", "http_status": status,
                 "request_bytes": len(body), "input_token_estimate": len(body),
                 "requested_max_tokens": limit,
@@ -272,7 +302,7 @@ class ProviderCalls:
                 )},
                 "currency": "CNY", "cost": cost, "cost_kind": "estimate" if cost is not None else "missing",
                 "price_source": DEEPSEEK_PRICE if deepseek else MINIMAX_PRICE, "price_date": PRICE_DATE,
-                "price_band": ("peak" if self.deepseek_peak else "off-peak") if deepseek else "standard",
+                "price_band": ("peak" if peak else "off-peak") if deepseek else "standard",
             }
             with self._lock:
                 if status in (401, 403):
@@ -284,7 +314,7 @@ class ProviderCalls:
                                  or (status is not None and 500 <= status < 600)):
                 time.sleep(1)
                 continue
-            raise ProviderError(f"{provider} {error}", status)
+            raise ProviderError(f"{provider} {error}", status, category=error)
         raise AssertionError("provider retry loop exceeded")
 
     def summary(self, *, task_id: str | None = None) -> dict:
@@ -314,7 +344,13 @@ class ProviderCalls:
             "attempts_by_module": dict(counts),
             "cost_estimate_cny": round(sum(costs), 9) if costs or not attempts else None,
             "attempts_with_cost": len(costs),
+            "attempts_without_cost": len(attempts) - len(costs),
+            "attempts_without_usage": sum(row["input_tokens"] is None or row["output_tokens"] is None
+                                         for row in attempts),
             "input_tokens_reported": sum(row["input_tokens"] or 0 for row in attempts),
             "output_tokens_reported": sum(row["output_tokens"] or 0 for row in attempts),
+            "cache_read_tokens_reported": sum(row.get("cache_read_tokens") or 0 for row in attempts),
+            "cache_write_tokens_reported": sum(row.get("cache_write_tokens") or 0 for row in attempts),
+            "cache_miss_tokens_reported": sum(row.get("cache_miss_tokens") or 0 for row in attempts),
             "elapsed_provider_seconds": round(sum(row["elapsed_seconds"] for row in attempts), 4),
         }

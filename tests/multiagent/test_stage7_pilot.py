@@ -1,0 +1,110 @@
+import json
+from contextlib import contextmanager
+from hashlib import sha256
+
+import pytest
+
+from misevolve import harness, stage7_pilot
+from misevolve._stage7_api import OPENCLAW_OUTPUT, ProviderCalls
+from misevolve.multiagent._io import append_jsonl, read_jsonl
+
+
+def test_published_plan_and_full_history():
+    episode, plan, _ = stage7_pilot._episode_and_plan()
+    assert plan["episode_id"] == "skillmisevo-coding-04"
+    assert plan["execution_order"] == list(stage7_pilot.POSITIONS)
+    assert [entry["worker_id"] for entry in plan["tasks"]] == list("AAAAAAAAABBBCCCDDDBCD")
+    prompts = {task["pos"]: task["prompt"] for task in episode["task_sequence"]}
+    assert all(sha256(prompts[entry["source_pos"]].encode()).hexdigest() == entry["prompt_sha256"]
+               for entry in plan["tasks"])
+    raw = [{"type": "session", "id": "synthetic"}] + [
+        {"type": "message", "message": {"role": "toolResult", "content": "test output" * 180}}
+        for _ in range(105)
+    ] + [{"type": "message", "message": {"role": "assistant", "content": "FINAL_TOOL_EVIDENCE"}}]
+    text = "".join(json.dumps(row) + "\n" for row in raw)
+    history = stage7_pilot._decode_history(text)
+    assert len(history) == 106 and history[-1]["message"]["content"] == "FINAL_TOOL_EVIDENCE"
+    with pytest.raises(ValueError, match="incomplete"):
+        stage7_pilot._decode_history(text[:-1])
+    for kind, modules in (("M", ["harm_judge"]), ("B", ["harm_judge", "utility_judge"]),
+                          ("P", ["harm_judge", "utility_judge"])):
+        rendered = list(stage7_pilot._task_prompts(episode, history, "synthetic risk", "synthetic utility", kind))
+        assert [module for module, _ in rendered] == modules
+        assert all("FINAL_TOOL_EVIDENCE" in prompt and len(prompt) > 160_000 for _, prompt in rendered)
+
+
+def test_mock_pilot_attributes_each_call_and_accepts_empty_transfers(tmp_path, monkeypatch, runner_factory):
+    class MockCalls(ProviderCalls):
+        def request(self, scope, module, payload, **kwargs):
+            append_jsonl(self.path, {
+                "task_id": scope.task_id, "worker_id": scope.worker_id, "instance_id": scope.instance_id,
+                "module": module, "status": "ok", "attempt": 1, "cost": 0,
+                "input_tokens": 10, "output_tokens": 10, "elapsed_seconds": 0,
+                "max_output_tokens": payload.get("max_tokens"),
+            })
+            if module == "openclaw":
+                return b"{}", "application/json"
+            if module == "extractor":
+                return b'{"content":[{"type":"text","text":"{\\"skills\\":[]}"}]}', "application/json"
+            value = {"reason": "Synthetic result."}
+            if module == "harm_judge":
+                value.update(harmful=False, score=0)
+            else:
+                assert module == "utility_judge"
+                value.update(completed=False, utility_score=0)
+            return json.dumps({"choices": [{
+                "finish_reason": "stop", "message": {"content": json.dumps(value)},
+            }]}).encode(), "application/json"
+
+    calls = MockCalls(tmp_path, deepseek_peak=False)
+
+    @contextmanager
+    def offline_relay(provider):
+        assert provider is calls
+        yield "synthetic-network", None
+
+    def runner(*_):
+        mock = runner_factory("openclaw", stage7_pilot.BACKBONE)
+
+        def execute(prompt, skills, *, out_dir):
+            calls.request(mock.scope, "openclaw", {"max_tokens": OPENCLAW_OUTPUT})
+            archive = "saved" if mock.scope.worker_id == "A" else "not_applicable"
+            evidence = {"history_complete": True, "workspace_archive": archive, "stop_reason": "stop"}
+            return harness.Trajectory(
+                [{"role": "assistant", "text": "Synthetic evidence."}], raw={
+                    "history": [{"message": {"role": "assistant", "content": "Synthetic evidence."}}],
+                    "_pilot_execution": evidence, "_skill_injection": {"status": "success", "skills": []},
+                },
+            )
+
+        mock.run = execute
+        return mock
+
+    monkeypatch.setattr(stage7_pilot, "isolated_relay", offline_relay)
+    monkeypatch.setattr(stage7_pilot, "PilotRunner", runner)
+    episode, _, _ = stage7_pilot._episode_and_plan()
+    assert stage7_pilot.pilot(calls, tmp_path, episode, {"configuration": {}})
+    report = json.loads((tmp_path / "pilot_summary.json").read_text(encoding="utf-8"))
+    assert report["technical_acceptance"] == "passed" and report["attempted_tasks"] == 21
+    rows = report["tasks"]
+    assert all(row["attack_success"] is False for row in rows)
+    assert [row["task_success"] for row in rows] == [None] * 9 + [False] * 12
+    assert all(row["native_ingest_ok"] is None for row in rows[-3:])
+    journal = read_jsonl(calls.path)
+    scopes = {row["task_run_id"]: row["instance_id"] for row in rows}
+    assert all(scopes[row["task_id"]] == row["instance_id"] for row in journal)
+    assert sum(row["module"] == "extractor" for row in journal) == 18
+    assert sum(row["module"] == "harm_judge" for row in journal) == 21
+    assert sum(row["module"] == "utility_judge" for row in journal) == 12
+    assert report["completed_hops"] == [["A", "B"], ["B", "C"], ["C", "D"]]
+
+
+def test_status_preserves_complete_records_before_a_torn_tail(tmp_path):
+    path = tmp_path / "episode" / "episode_events.jsonl"
+    append_jsonl(path, {"event": "task_finished", "execution_index": 8})
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write('{"event":')
+    report = stage7_pilot._status(tmp_path)
+    counts = next(iter(report["durable_events"].values()))
+    assert counts == {"task_finished": 1, "incomplete_tail": 1}
+    assert next(iter(report["latest_checkpoints"].values()))["execution_index"] == 8

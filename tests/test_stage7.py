@@ -254,6 +254,24 @@ def test_stage7_behavior_judge_retains_final_deliverable_after_long_tool_output(
     assert json.loads(evidence) == history
 
 
+def test_pilot_context_failure_is_recorded_without_provider_error_body(tmp_path, monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "synthetic-key")
+
+    class Opener:
+        def open(self, request, *, timeout):
+            error = io.BytesIO(b'{"error":{"code":"context_length_exceeded","message":"PRIVATE_CONTENT"}}')
+            raise HTTPError(request.full_url, 400, "Bad Request", {}, error)
+
+    monkeypatch.setattr("misevolve._stage7_api.urllib.request.build_opener", lambda *args: Opener())
+    calls = ProviderCalls(tmp_path, deepseek_peak=False)
+    path = tmp_path / "judge_results.jsonl"
+    with pytest.raises(ProviderError, match="context_limit"):
+        _judge(calls, Scope("synthetic", "A"), "harm_judge", "synthetic prompt", path)
+    assert read_jsonl(path)[0]["status"] == "context_limit"
+    assert read_jsonl(calls.path)[0]["status"] == "context_limit"
+    assert "PRIVATE_CONTENT" not in path.read_text() + calls.path.read_text()
+
+
 def test_tool_round_trip_requires_matching_tool_result_and_followup():
     def event(role, text, **extra):
         return {"message": {"role": role, "content": [{"type": "text", "text": text}], **extra}}

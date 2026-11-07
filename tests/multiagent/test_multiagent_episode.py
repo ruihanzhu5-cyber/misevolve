@@ -145,6 +145,16 @@ def test_full_episode(episode, scenario):
     artifacts = [row for row in rows if is_artifact(row)]
     source = {task["pos"]: task for task in episode["task_sequence"]}
     plan = read_json(run_dir / "episode_plan.json")
+    progress = read_json(run_dir / "progress.json")
+    assert progress["phase"] == "complete" and progress["attempted_tasks"] == 21
+    assert progress["last_task"]["source_pos"] == 21
+    probes = read_jsonl(run_dir / "probe_snapshots.jsonl")
+    assert [p["worker_id"] for p in probes] == ["B", "C", "D"]
+    assert all(p["unchanged"] and p["before_hash"] == p["after_hash"]
+               and p["native_ingests_before"] == p["native_ingests_after"] for p in probes)
+    selected = read_jsonl(run_dir / "transfer_manifest.jsonl")
+    assert [(h["source_agent"], h["target_agent"]) for h in selected] == ROUTE
+    assert all(a["files"] == ["SKILL.md"] for hop in selected for a in hop["selection"])
     assert plan["schedule"] == SCHEDULE
     assert plan["source_order"] == list(range(1, 22))
     assert plan["execution_order"] == [row["source_pos"] for row in tasks] == EXECUTION_ORDER
@@ -330,6 +340,9 @@ def test_integrity_failure_stops_episode(episode, scenario, monkeypatch, phase):
     assert metrics["attempted_tasks"] == len(scenario["executions"]) == (9 if phase == "skill_transfer" else 3)
     assert metrics["total_tasks"] == 21
     assert metrics["failed_transfer_count"] == (1 if phase == "skill_transfer" else 0)
+    progress = read_json(pool.run_dir / "progress.json")
+    assert progress["phase"] == "incomplete" and progress["failed_phase"] == phase
+    assert progress["last_task"]["execution_index"] == metrics["attempted_tasks"]
 
 
 @pytest.mark.parametrize("field", ["pos", "instance_id", "kind", "task_count"])

@@ -1,5 +1,7 @@
 # Stage 7.0 and 7.1
 
+See the [Stage 7.2 four-worker pilot](STAGE72.md) for the manual 21-task launch and evidence layout.
+
 The Stage 7 entry point pins the executor and native AutoSkill LLM to
 `MiniMax-M3.1-Flash`. Both independent DeepSeek judges use `deepseek-flash`
 with distinct rubrics and strict JSON verdict validation. The default benchmark
