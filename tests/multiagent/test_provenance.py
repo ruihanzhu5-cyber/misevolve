@@ -20,8 +20,8 @@ def reference(artifact):
             "origin": "locally_created", "imported_global_skill_id": None}
 
 
-def task_event(run_dir, kind, *, worker="A", task="task-1", **fields):
-    row = {"schema_version": 1, "event": kind, "event_id": f"{kind}:{task}",
+def task_event(run_dir, event_kind, *, worker="A", task="task-1", **fields):
+    row = {"schema_version": 1, "event": event_kind, "event_id": f"{event_kind}:{task}",
            "worker_id": worker, "task_run_id": task, "pos": 1, "kind": "B", **fields}
     append_jsonl(run_dir / "workers" / worker / "task_events.jsonl", row)
     return row
@@ -105,6 +105,7 @@ def test_missing_or_incomplete_manifest_does_not_establish_injection(tmp_path, m
     registry = GlobalSkillRegistry(tmp_path / "registry")
     artifact = registry.register_skill("A", bundle())
     task_event(tmp_path, "task_retrieval", retrieved=[reference(artifact)], retrieval_status="completed")
+    task_event(tmp_path, "task_injection_intent", intended=[reference(artifact)], injection_source="native_search")
     task_event(tmp_path, "task_execution", execution_status="completed", injection_manifest=manifest,
                assistant_text="I invoked the synthetic skill.", tool_calls=[{"name": "exec", "input": "synthetic"}])
     tracker = ProvenanceTracker(tmp_path, registry)
@@ -119,6 +120,7 @@ def test_successful_manifest_is_injection_only_and_uses_runtime_identity(tmp_pat
     registry = GlobalSkillRegistry(tmp_path / "registry")
     artifact = registry.register_skill("A", bundle())
     task_event(tmp_path, "task_retrieval", retrieved=[reference(artifact)], retrieval_status="completed")
+    task_event(tmp_path, "task_injection_intent", intended=[reference(artifact)], injection_source="native_search")
     task_event(tmp_path, "task_execution", execution_status="failed", error_type="RuntimeError", injection_manifest={
         "status": "success", "skills": [{"local_skill_id": artifact.local_skill_key,
         "runtime_skill_name": "synthetic", "runtime_directory_slug": "synthetic-2", "runtime_content_hash": "a" * 64}],
@@ -130,6 +132,104 @@ def test_successful_manifest_is_injection_only_and_uses_runtime_identity(tmp_pat
     assert context["injected"][0]["global_skill_id"] == artifact.global_skill_id
     assert context["injected"][0]["runtime_content_hash"] == "a" * 64
     assert context["invoked"] == []
+
+
+@pytest.mark.parametrize("manifest_ids,intent,confirmed", [
+    (["second", "first"], True, True),
+    (["first"], True, False),
+    (["first", "second", "extra"], True, False),
+    (["first", "second", "second"], True, False),
+    (["first", "second"], False, False),
+])
+def test_manifest_requires_exact_prior_intent(tmp_path, manifest_ids, intent, confirmed):
+    registry = GlobalSkillRegistry(tmp_path / "registry")
+    artifacts = [registry.register_skill("A", bundle(key=key)) for key in ("first", "second")]
+    refs = [reference(artifact) for artifact in artifacts]
+    task_event(tmp_path, "task_retrieval", retrieved=refs, retrieval_status="completed")
+    if intent:
+        task_event(tmp_path, "task_injection_intent", intended=refs, injection_source="native_search")
+    task_event(tmp_path, "task_execution", execution_status="completed", injection_manifest={
+        "status": "success", "skills": [
+            {"local_skill_id": key, "runtime_skill_name": key, "runtime_directory_slug": key,
+             "runtime_content_hash": "a" * 64} for key in manifest_ids
+        ],
+    })
+    tracker = ProvenanceTracker(tmp_path, registry)
+    tracker.sync()
+    context = tracker.get_task_context("task-1")
+    assert context["injection_status"] == ["success" if confirmed else "unknown"]
+    assert len(context["intended_injection"]) == (2 if intent else 0)
+    assert len(context["injected"]) == (2 if confirmed else 0)
+    assert len(tracker.get_events("injected_to")) == (2 if confirmed else 0)
+    assert tracker.sync() == []
+
+
+def test_frozen_library_intent_has_no_native_retrieval(tmp_path):
+    registry = GlobalSkillRegistry(tmp_path / "registry")
+    artifact = registry.register_skill("B", bundle())
+    task_event(tmp_path, "task_injection_intent", worker="B", kind="P", intended=[reference(artifact)],
+               injection_source="frozen_library")
+    task_event(tmp_path, "task_execution", worker="B", kind="P", execution_status="completed", injection_manifest={
+        "status": "success", "skills": [{"local_skill_id": artifact.local_skill_key, "runtime_skill_name": "synthetic",
+                                         "runtime_directory_slug": "synthetic", "runtime_content_hash": "a" * 64}],
+    })
+    tracker = ProvenanceTracker(tmp_path, registry)
+    tracker.sync()
+    context = tracker.get_task_context("task-1")
+    assert context["injection_source"] == "frozen_library"
+    assert context["intended_injection"][0]["content_hash"] == artifact.content_hash
+    assert context["injected"][0]["global_skill_id"] == artifact.global_skill_id
+    assert context["retrieved"] == tracker.get_events("retrieved_from") == []
+
+
+def test_imported_reference_collision_requires_verified_transfer(tmp_path):
+    registry = GlobalSkillRegistry(tmp_path / "registry")
+    original = registry.register_skill("A", bundle())
+    collision = registry.register_skill("B", {
+        **bundle(key="receiver-local"), "skill_files": imported_files(original.skill_files, "receiver-local"),
+    })
+    ref = {**reference(collision), "origin": "imported", "imported_global_skill_id": original.global_skill_id}
+    transfer(registry, original, attempt_id="failed", native_retrieval_verified=False)
+    assert registry.resolve_reference("B", ref)["global_skill_id"] is None
+    transfer(registry, original)
+    assert registry.resolve_reference("B", ref)["global_skill_id"] == original.global_skill_id
+
+
+def test_lineage_keeps_chain_hops_and_artifact_ancestry_separate(tmp_path):
+    registry = GlobalSkillRegistry(tmp_path / "registry")
+    artifacts = [registry.register_skill("A", bundle())]
+    for worker in ("B", "C"):
+        parent = artifacts[-1].global_skill_id
+        artifacts.append(registry.register_skill(worker, bundle(text=worker, key=f"local-{worker}"), provenance={
+            "parent_skill_ids": [parent],
+            "parent_evidence": {parent: {"type": "explicit_derivation", "source_ref": f"explicit:{worker}"}},
+        }))
+    for artifact, receiver in zip(artifacts, "BCD", strict=True):
+        transfer(registry, artifact, target_agent=receiver, target_local_id=f"imported-{receiver}",
+                 attempt_id=f"transfer-{receiver}")
+    tracker = ProvenanceTracker(tmp_path, registry)
+    tracker.sync()
+    lineage = tracker.get_lineage(artifacts[-1].global_skill_id)
+    assert set(lineage["ancestors"]) == {artifact.global_skill_id for artifact in artifacts[:-1]}
+    hops = lineage["transferred_from"]
+    assert [(hop["source_agent"], hop["target_agent"]) for hop in hops] == [("A", "B"), ("B", "C"), ("C", "D")]
+    for hop, artifact, receiver in zip(hops, artifacts, "BCD", strict=True):
+        assert hop["source_event_id"] == f"transfer-{receiver}"
+        assert hop["global_skill_id"] == artifact.global_skill_id
+        assert hop["source_local_id"] == artifact.local_skill_key
+        assert hop["target_local_id"] == hop["receiver_reference"]["local_skill_id"] == f"imported-{receiver}"
+        assert hop["receiver_reference"]["worker_id"] == receiver
+
+
+def test_stage5_cache_requires_rebuild_without_changing_source_journals(tmp_path):
+    task_event(tmp_path, "task_execution", execution_status="completed",
+               injection_manifest={"status": "success", "skills": []})
+    append_jsonl(tmp_path / "provenance" / "provenance_events.jsonl", {"schema_version": 1})
+    with pytest.raises(ProvenanceIntegrityError, match="rebuild the Stage 5 projection"):
+        ProvenanceTracker(tmp_path)
+    rebuilt = ProvenanceTracker(tmp_path, output_dir=tmp_path / "rebuilt")
+    rebuilt.sync()
+    assert rebuilt.get_task_context("task-1")["injection_status"] == ["unknown"]
 
 
 def test_explicit_invocation_is_independent_evidence(tmp_path):

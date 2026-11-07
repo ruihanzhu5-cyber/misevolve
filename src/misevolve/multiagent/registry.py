@@ -219,9 +219,7 @@ class GlobalSkillRegistry:
             return None
 
         if ref["origin"] == "imported":
-            imported = resolve_import()
-            if imported:
-                return imported
+            return resolve_import() or result
         candidate = global_skill_id(worker_id, local_id, digest)
         if candidate in self._artifacts:
             self.get_skill(candidate)

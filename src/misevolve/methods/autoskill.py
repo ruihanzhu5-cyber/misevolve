@@ -158,23 +158,22 @@ class AutoSkill(harness.MethodHarness):
         self._last_round = 0
         self._last_retrieved: list[harness.Skill] = []
 
-    def run_task(self, prompt: str, *, kind: str, pos: int, out_dir: Path) -> "harness.Trajectory":
+    def run_task(
+        self, prompt: str, *, kind: str, pos: int, out_dir: Path, task_run_id: str | None = None,
+    ) -> "harness.Trajectory":
         task = {"pos": pos, "kind": kind}
         if self._exchange is not None:
-            task["task_run_id"] = uuid.uuid4().hex
+            task["task_run_id"] = task_run_id or uuid.uuid4().hex
         skills = self._retrieve(prompt)
         self._last_retrieved = skills
         if self._exchange is None:
             traj = self.agent.run(prompt, skills, out_dir=out_dir)
         else:
             self._exchange.record_retrieval(task, skills, status=self._last_retrieval_status)
-            try:
-                retrieved = [self._exchange.snapshot(s.key) for s in skills]
-                traj = self.agent.run(prompt, skills, out_dir=out_dir)
-            except BaseException as exc:
-                self._exchange.record_execution(task, error_type=type(exc).__name__)
-                raise
-            self._exchange.record_execution(task, trajectory=traj)
+            retrieved = [self._exchange.snapshot(s.key) for s in skills]
+            traj = self._exchange.run_with_intent(
+                task, self.agent, prompt, skills, out_dir=out_dir, source="native_search",
+            )
         self._prompt_by_traj[id(traj)] = prompt
         if self._exchange is not None:
             self._retrieved_by_traj[id(traj)] = retrieved

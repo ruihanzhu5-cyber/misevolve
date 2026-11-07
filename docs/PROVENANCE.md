@@ -1,4 +1,4 @@
-# Stage 5 provenance contract
+# Provenance contract
 
 `ProvenanceTracker` projects original journals without executing agents or calling models.
 It retains the Stage 2–4 single-writer assumption. Full episode scheduling is deferred.
@@ -37,7 +37,7 @@ silently execute synchronization. Unknown task/artifact queries raise `KeyError`
 |---|---|
 | `transferred_from` | Receiver local version → source global artifact; success, integrity, diagnostic visibility, and source identity must all verify |
 | `retrieved_from` | Task run → local version captured by the task's SDK search, flushed before execution |
-| `injected_to` | Exact runtime skill → task run; requires a successful, complete runner manifest |
+| `injected_to` | Runtime skill → task run when a successful runner manifest exactly matches the prior intent |
 | `invoked_from` | Task run → local version; requires explicit invocation instrumentation with a nonempty source reference |
 | `native_revision` | New global artifact → exact predecessor; corroborated by same-local-ID native before/after snapshots |
 | `derived_from` | Child global artifact → registered parent; requires `explicit_derivation` evidence and a nonempty source reference |
@@ -60,10 +60,17 @@ do not use a current mutable Local→Global map to attribute an earlier task. `r
 binds that exact local version to a registered global artifact. Imported references also
 require verified transfer history and an exact native-ID-adapted content hash.
 
-`reference_observed` records the original compact reference. `runtime_from` binds a runtime
-manifest item to the version supplied by the matching task retrieval. The runtime hash is
-SHA-256 of the actual copied file bytes; it differs in meaning from the canonical registry
-bundle hash. Duplicate display names retain distinct final runtime directory slugs.
+`task_injection_intent` records the local IDs and exact version hashes before the runner starts.
+Its source is `native_search` for M/B tasks and `frozen_library` for P probes. P probes bypass
+native Search. The projection preserves intent independently, including after execution failure.
+Confirmation requires a successful manifest with exactly the intended ID set and unique, valid
+entries. Missing, extra, duplicate, or malformed entries leave injection unknown.
+
+`reference_observed` records the original compact reference. `runtime_from` binds a confirmed
+manifest item to the version in the prior intent. The runtime hash covers the copied file bytes.
+The intent hash covers the canonical Skill bundle. Duplicate display names retain distinct
+runtime directory slugs. `get_task_context()` exposes `intended_injection`, `injection_source`,
+and confirmed `injected` entries separately.
 
 These auxiliary edges are intentionally separate. An initially unknown reference remains
 an immutable fact; a later registration appends a resolution. Fresh rebuild and incremental
@@ -87,8 +94,11 @@ Explicit derivation is confirmed only for a registered parent with
 
 `get_lineage()` separates transfer, native revision, and explicit derivation. It returns
 ancestors, descendants, and unresolved predecessors without inventing global IDs. It
-deduplicates graph edges while `get_events()` retains each independent evidence record.
-No causal harm attribution or propagation-depth metric is implemented here.
+deduplicates artifact ancestry edges while `get_events()` retains each independent evidence
+record. `transferred_from` in the lineage response lists directed worker hops with both local
+IDs, the shared Global ID, the receiver version reference, and the source transfer event ID.
+Imported references require verified transfer evidence even when a receiver-owned artifact
+has the same local ID and hash.
 
 ## Persistence and integrity
 
@@ -98,6 +108,10 @@ Every normalized event has `schema_version`, deterministic `event_id`, `relation
 source identity, relation, and endpoint references. Transfer start and completion share an
 attempt ID but have distinct source kinds. Legacy records without IDs use stable row IDs;
 legacy evolution without a task UUID does not receive an invented one.
+
+Stage 5.1 uses projection schema 2. Rebuild a schema 1 cache into a new `output_dir` using
+the same source journals. Older execution records without an earlier injection intent project
+to unknown injection status. The original cache and journals can be retained as evidence.
 
 `source_record` contains a digest of original evidence to detect rewrites even when a
 mutation changes an endpoint. Different content under an existing event ID raises

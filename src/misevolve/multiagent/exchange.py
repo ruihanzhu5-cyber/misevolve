@@ -113,14 +113,33 @@ class AutoSkillExchange:
         append_jsonl(self.task_path, event)
         return event
 
-    def record_retrieval(self, task: dict, skills, *, status: str) -> None:
-        references = []
-        for skill in skills:
-            references.append(skill_reference({
+    def _skill_references(self, skills) -> list[dict]:
+        return [
+            skill_reference({
                 **self.origins.get(skill.key, {}),
                 "local_skill_key": skill.key, "content_hash": content_hash({"SKILL.md": skill.text}),
-            }))
-        self._task_event("task_retrieval", task, retrieval_status=status, retrieved=references)
+            })
+            for skill in skills
+        ]
+
+    def record_retrieval(self, task: dict, skills, *, status: str) -> None:
+        self._task_event("task_retrieval", task, retrieval_status=status, retrieved=self._skill_references(skills))
+
+    def run_with_intent(self, task: dict, runner, prompt: str, skills, *, out_dir: Path, source: str):
+        if source not in {"native_search", "frozen_library"}:
+            raise ValueError("invalid injection source")
+        if (task["kind"] == "P") != (source == "frozen_library"):
+            raise ValueError("injection source disagrees with task kind")
+        self._task_event(
+            "task_injection_intent", task, injection_source=source, intended=self._skill_references(skills),
+        )
+        try:
+            trajectory = runner.run(prompt, skills, out_dir=out_dir)
+        except BaseException as exc:
+            self.record_execution(task, error_type=type(exc).__name__)
+            raise
+        self.record_execution(task, trajectory=trajectory)
+        return trajectory
 
     def record_execution(self, task: dict, *, trajectory=None, error_type: str | None = None) -> None:
         raw = trajectory.raw if trajectory is not None and isinstance(trajectory.raw, dict) else {}
@@ -140,6 +159,7 @@ class AutoSkillExchange:
         self._task_event(
             "task_execution", task, execution_status="failed" if failed else "completed",
             error_type=error_type or ("runner_error" if failed else None), injection_manifest=safe_manifest,
+            runner_raised=error_type is not None,
         )
 
     def record_invocation_evidence(self, task_run_id: str, local_id: str, *, source_ref: str) -> None:

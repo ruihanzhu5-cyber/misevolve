@@ -50,8 +50,9 @@ def test_retrieval_is_durable_before_execution_and_raised_failure_preserves_it(
 
     def fail(prompt, skills, *, out_dir):
         events = read_jsonl(worker.method._exchange.task_path)
-        assert events[-1]["event"] == "task_retrieval"
-        assert events[-1]["retrieved"][0]["local_skill_id"] == skill.id
+        assert [row["event"] for row in events[-2:]] == ["task_retrieval", "task_injection_intent"]
+        assert events[-2]["retrieved"][0]["local_skill_id"] == skill.id
+        assert events[-1]["intended"] == events[-2]["retrieved"]
         assert prompt not in worker.method._exchange.task_path.read_text(encoding="utf-8")
         task_ids.append(events[-1]["task_run_id"])
         raise RuntimeError("PRIVATE_ERROR_WITH_PROMPT")

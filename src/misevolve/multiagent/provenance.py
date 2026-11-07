@@ -19,6 +19,8 @@ from .models import content_hash
 from .models import valid_evidence as _explicit
 from .registry import GlobalSkillRegistry
 
+_SCHEMA_VERSION = 2
+
 
 class ProvenanceIntegrityError(ValueError):
     """Source evidence or a previously normalized event changed identity/content."""
@@ -50,8 +52,12 @@ class ProvenanceTracker:
         self.journal = Path(output_dir or self.run_dir / "provenance") / "provenance_events.jsonl"
         self._events: dict[str, dict] = {}
         for event in read_jsonl(self.journal):
+            if event.get("schema_version") == 1:
+                raise ProvenanceIntegrityError(
+                    "rebuild the Stage 5 projection from source journals in a new output_dir"
+                )
             try:
-                valid = event["schema_version"] == 1 and event["event_id"] == _event_id(event)
+                valid = event["schema_version"] == _SCHEMA_VERSION and event["event_id"] == _event_id(event)
             except KeyError as exc:
                 raise ProvenanceIntegrityError("invalid normalized event schema") from exc
             if not valid:
@@ -69,7 +75,7 @@ class ProvenanceTracker:
               evidence_status="confirmed", **metadata):
         path, source_id, source_kind, _ = source
         event = {
-            "schema_version": 1, "relation": relation, "subject": subject, "object": obj,
+            "schema_version": _SCHEMA_VERSION, "relation": relation, "subject": subject, "object": obj,
             "worker_id": worker_id, "task_run_id": task_run_id, "evidence_source": path,
             "source_event_id": source_id, "source_event_kind": source_kind,
             "evidence_status": evidence_status, "evidence_metadata": metadata,
@@ -167,8 +173,8 @@ class ProvenanceTracker:
                        evidence_status="observed")
 
     @staticmethod
-    def _valid_manifest(manifest):
-        if (not isinstance(manifest, dict) or manifest.get("status") != "success"
+    def _valid_manifest(manifest, expected_ids: set[str] | None) -> bool:
+        if (expected_ids is None or not isinstance(manifest, dict) or manifest.get("status") != "success"
                 or not isinstance(manifest.get("skills"), list)):
             return False
         seen = set()
@@ -184,7 +190,34 @@ class ProvenanceTracker:
                     or not re.fullmatch(r"[a-f0-9]{64}", item.get("runtime_content_hash", ""))):
                 return False
             seen.add(item["local_skill_id"])
-        return True
+        return seen == expected_ids
+
+    def _project_intent(self, source, worker, task_id, task):
+        row = source[3]
+        injection_source = row.get("injection_source")
+        intended = row.get("intended")
+        if injection_source not in {"native_search", "frozen_library"} or not isinstance(intended, list):
+            raise ProvenanceIntegrityError("invalid injection intent")
+        if (row.get("kind") == "P") != (injection_source == "frozen_library"):
+            raise ProvenanceIntegrityError("injection intent source disagrees with task kind")
+        references = {}
+        for ref in intended:
+            if not isinstance(ref, dict):
+                raise ProvenanceIntegrityError("invalid injection intent reference")
+            local_id = ref.get("local_skill_id")
+            digest = ref.get("content_hash")
+            if (not isinstance(local_id, str) or not local_id or local_id in references
+                    or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)):
+                raise ProvenanceIntegrityError("invalid or duplicate injection intent reference")
+            references[local_id], _ = self._observe(worker, ref, source, task_id)
+        key = (worker, task_id)
+        previous = self._intents.get(key)
+        if previous is not None and previous != row:
+            raise ProvenanceIntegrityError("task_run_id has conflicting injection intent")
+        self._intents[key] = row
+        self._emit(source, "injection_intent", task,
+                   {"kind": "injection_intent", "references": list(references.values())},
+                   worker_id=worker, task_run_id=task_id, injection_source=injection_source)
 
     def _project_task(self, source):
         row = source[3]
@@ -200,17 +233,20 @@ class ProvenanceTracker:
                 local, _ = self._observe(worker, ref, source, task_id)
                 self._emit(source, "retrieved_from", task, local, worker_id=worker, task_run_id=task_id,
                            evidence_status="confirmed" if status != "failed" else "unknown")
+        elif kind == "task_injection_intent":
+            self._project_intent(source, worker, task_id, task)
         elif kind == "task_execution":
             self._emit(source, "execution_status", task,
                        {"kind": "execution", "status": row.get("execution_status", "unknown")},
                        worker_id=worker, task_run_id=task_id, error_type=row.get("error_type"))
             manifest = row.get("injection_manifest")
-            valid = self._valid_manifest(manifest)
+            intent = self._intents.get((worker, task_id))
+            references = {ref["local_skill_id"]: ref for ref in intent["intended"]} if intent is not None else {}
+            valid = self._valid_manifest(manifest, set(references) if intent is not None else None)
             self._emit(source, "injection_status", task,
                        {"kind": "injection", "status": "success" if valid else "unknown"},
                        worker_id=worker, task_run_id=task_id, evidence_status="confirmed" if valid else "unknown")
             if valid:
-                references = self._retrievals.get((worker, task_id), {})
                 for item in manifest["skills"]:
                     runtime = {
                         "kind": "runtime_skill", "worker_id": worker, "task_run_id": task_id,
@@ -220,9 +256,9 @@ class ProvenanceTracker:
                     }
                     self._emit(source, "injected_to", runtime, task, worker_id=worker, task_run_id=task_id,
                                runtime_skill_name=item["runtime_skill_name"])
-                    if item["local_skill_id"] in references:
-                        local, _ = self._observe(worker, references[item["local_skill_id"]], source, task_id)
-                        self._emit(source, "runtime_from", runtime, local, worker_id=worker, task_run_id=task_id)
+                    local, _ = self._observe(worker, references[item["local_skill_id"]], source, task_id)
+                    self._emit(source, "runtime_from", runtime, local, worker_id=worker, task_run_id=task_id,
+                               intent_event_id=intent["event_id"])
         elif kind == "skill_invocation":
             evidence = row.get("evidence", {})
             if not _explicit(evidence, "explicit_invocation"):
@@ -262,15 +298,16 @@ class ProvenanceTracker:
         self.registry = GlobalSkillRegistry(self.registry.directory)
         sources = list(self._sources())
         self._pending: dict[str, dict] = {}
-        self._retrievals = {}
+        self._intents = {}
+        retrievals = {}
         for source in sources:
             row = source[3]
             if row.get("event") == "task_retrieval":
                 key = (row["worker_id"], row["task_run_id"])
                 refs = {ref["local_skill_id"]: ref for ref in row.get("retrieved", [])}
-                if key in self._retrievals and self._retrievals[key] != refs:
+                if key in retrievals and retrievals[key] != refs:
                     raise ProvenanceIntegrityError("task_run_id has conflicting retrieval evidence")
-                self._retrievals[key] = refs
+                retrievals[key] = refs
         for source in sources:
             row = source[3]
             self._emit(source, "source_record", {"kind": "source_event", "source_event_id": source[1]},
@@ -325,9 +362,12 @@ class ProvenanceTracker:
             raise KeyError(task_run_id)
         def references(relation, endpoint):
             return [self._resolved(e[endpoint]) for e in events if e["relation"] == relation]
+        intent = next((e for e in events if e["relation"] == "injection_intent"), None)
         return {
             "task_run_id": task_run_id, "worker_ids": sorted({e["worker_id"] for e in events if e["worker_id"]}),
             "retrieved": references("retrieved_from", "object"),
+            "intended_injection": [self._resolved(ref) for ref in intent["object"]["references"]] if intent else [],
+            "injection_source": intent["evidence_metadata"]["injection_source"] if intent else None,
             "injected": references("injected_to", "subject"),
             "invoked": references("invoked_from", "object"),
             "invocation_status": "observed" if any(e["relation"] == "invoked_from" for e in events) else "unknown",
@@ -339,7 +379,7 @@ class ProvenanceTracker:
 
     def get_lineage(self, global_skill_id: str) -> dict:
         self.registry.get_skill(global_skill_id)
-        relations = {"native_revision": [], "derived_from": [], "transferred_from": []}
+        relations = {"native_revision": [], "derived_from": []}
         seen = set()
         for event in self._events.values():
             if event["relation"] in relations and event["evidence_status"] == "confirmed":
@@ -367,6 +407,12 @@ class ProvenanceTracker:
         result = {relation: [edge for edge in items if edge["subject"]["global_skill_id"] in connected
                             and edge["object"]["global_skill_id"] in connected]
                   for relation, items in relations.items()}
+        result["transferred_from"] = [
+            {**event["evidence_metadata"], "global_skill_id": event["object"]["global_skill_id"],
+             "receiver_reference": event["subject"].copy(), "source_event_id": event["source_event_id"]}
+            for event in self._events.values() if event["relation"] == "transferred_from"
+            and event["evidence_status"] == "confirmed" and event["object"]["global_skill_id"] in connected
+        ]
         unresolved = {}
         for event in self._events.values():
             if event["relation"] == "revision_predecessor":
