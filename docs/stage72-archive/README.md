@@ -8,7 +8,9 @@ The run manifest and package inventories in this directory were captured from th
 The host used Ubuntu 24.04, Python 3.12.3, Docker 29.1.3 and OpenClaw 2026.11.1.
 `autoskill-commit.txt` pins the exact AutoSkill revision. `openclaw-image.txt` records the
 image ID, tag, platform and size. `python-requirements.lock` lists the distributions installed
-in the run's virtual environment, including the locally installed MisEvolve project.
+in the run's virtual environment. The Pilot loads MisEvolve from the pinned checkout via
+`PYTHONPATH=src`. Restore that checkout and the pinned AutoSkill source separately from the
+Python packages.
 
 The native archive preserves the directory and file structure from ECS. It includes both
 Stage 7.2 runs and the Stage 7 preflight, smoke runs and replays under `misevolve-stage7/results/`.
