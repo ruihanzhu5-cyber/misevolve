@@ -53,7 +53,7 @@ class OpenClawRunner(harness.AgentRunner):
         self._episode_dir: Path | None = None
         self._port: int | None = None
         self._base = ""
-        self._timeout = int(os.environ.get("SKILLMISEVO_TASK_TIMEOUT", "1200"))
+        self._timeout: int | None = int(os.environ.get("SKILLMISEVO_TASK_TIMEOUT", "1200"))
         self._boot_timeout = int(os.environ.get("SKILLMISEVO_BOOT_TIMEOUT", "120"))
 
     @staticmethod
@@ -62,7 +62,7 @@ class OpenClawRunner(harness.AgentRunner):
     ) -> subprocess.CompletedProcess:
         return subprocess.run(["docker", *args], capture_output=capture, text=True, timeout=timeout, check=check)
 
-    def _http(self, method: str, path: str, body: dict | None = None, *, timeout: int) -> tuple[int, dict | str]:
+    def _http(self, method: str, path: str, body: dict | None = None, *, timeout: int | None) -> tuple[int, dict | str]:
         url = f"{self._base}{path}"
         data = json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(url, data=data, method=method)

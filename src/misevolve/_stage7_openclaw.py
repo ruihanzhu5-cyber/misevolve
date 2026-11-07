@@ -6,8 +6,6 @@ import hmac
 import ipaddress
 import json
 import secrets
-import time
-import urllib.error
 import uuid
 from contextlib import contextmanager
 from dataclasses import replace
@@ -117,7 +115,7 @@ class Stage7Runner(OpenClawRunner):
         self.network = network
         self.relay = relay
         self.scope: Scope | None = None
-        self._timeout = min(self._timeout, 150)
+        self._timeout = None
 
     def isolate(self, episode_dir: Path) -> None:
         self._episode_dir = Path(episode_dir)
@@ -155,21 +153,23 @@ else:
     raise SystemExit("OpenClaw Gateway did not begin listening")
 """
         self._docker(["exec", self.container, "python3", "-c", probe], timeout=95)
+        # The pinned agent CLI reads this value and forwards it to the Gateway.
+        config = ["exec", self.container, "openclaw", "config"]
+        key = "agents.defaults.timeoutSeconds"
+        self._docker([*config, "set", key, "0", "--strict-json"])
+        result = self._docker([*config, "get", key, "--json"])
+        value = json.loads(result.stdout)
+        if type(value) is not int or value != 0:
+            raise ValueError("OpenClaw did not confirm the disabled task deadline")
 
     def _http(self, method, path, body=None, *, timeout):
         if method != "POST" or path != "/prompt":
             return super()._http(method, path, body, timeout=timeout)
         if self.scope is None:
             raise ValueError("Stage 7 prompt has no task scope")
-        self.relay.scope = replace(self.scope, deadline=time.monotonic() + timeout)
+        self.relay.scope = self.scope
         try:
             return super()._http(method, path, body, timeout=timeout)
-        except TimeoutError:
-            return 408, {"status": "task_timeout"}
-        except urllib.error.URLError as exc:
-            if isinstance(exc.reason, TimeoutError):
-                return 408, {"status": "task_timeout"}
-            raise
         finally:
             self.relay.scope = None
 

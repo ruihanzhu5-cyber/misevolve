@@ -1,13 +1,14 @@
 import io
 import json
 import runpy
-import time
+from types import SimpleNamespace
 from urllib.error import HTTPError
 
 import pytest
 
 from misevolve._stage7_api import DEEPSEEK_MODEL, MINIMAX_MODEL, ProviderCalls, ProviderError, Scope, _usage
-from misevolve._stage7_openclaw import tool_round_trip
+from misevolve._stage7_openclaw import Stage7Runner, tool_round_trip
+from misevolve.adapters.openclaw_runner import OpenClawRunner
 from misevolve.multiagent._io import read_jsonl
 from misevolve.paths import repo_root
 from misevolve.stage7 import _benign_tasks, _complete_smoke, _judge, preflight
@@ -91,11 +92,11 @@ def test_openclaw_has_no_request_count_cap_and_prices_streams_without_cache_writ
 
     monkeypatch.setattr("misevolve._stage7_api.urllib.request.build_opener", lambda *args: Opener())
     calls = ProviderCalls(tmp_path, deepseek_peak=False)
-    scope = Scope("task", "A", deadline=time.monotonic() + 20)
+    scope = Scope("task", "A")
     for _ in range(20):
         calls.request(scope, "openclaw", {"model": MINIMAX_MODEL, "max_tokens": 9999})
     assert len(requests) == 20
-    assert all(body["max_tokens"] == 2048 and 0 < timeout <= 20 for body, timeout in requests)
+    assert all(body["max_tokens"] == 2048 and timeout == 45 for body, timeout in requests)
     summary = calls.summary(task_id="task")
     assert summary["openclaw_requests"] == summary["attempts_with_cost"] == 20
     assert summary["cost_estimate_cny"] == pytest.approx(20 * 0.0000525)
@@ -103,27 +104,30 @@ def test_openclaw_has_no_request_count_cap_and_prices_streams_without_cache_writ
     assert all(row["cache_write_tokens"] is None for row in read_jsonl(calls.path))
 
 
-def test_executor_deadline_blocks_new_calls_and_retries(tmp_path, monkeypatch):
-    monkeypatch.setenv("MINIMAX_API_KEY", "synthetic-key")
-    now = [0.0]
-    monkeypatch.setattr("misevolve._stage7_api.time.monotonic", lambda: now[0])
-    requests = []
+def test_stage7_disables_the_prompt_wait_and_gateway_deadline(monkeypatch):
+    relay = SimpleNamespace(server_address=("127.0.0.1", 8000), scope=None)
+    runner = Stage7Runner("stage7", relay)
+    runner.scope = Scope("task", "A")
+    runner.container = "mock-container"
+    commands = []
+    monkeypatch.setattr(OpenClawRunner, "_wait_healthy", lambda _: None)
 
-    class Opener:
-        def open(self, request, *, timeout):
-            requests.append(timeout)
-            now[0] = 2.0
-            raise TimeoutError()
+    def docker(args, **kwargs):
+        commands.append(args)
+        return SimpleNamespace(stdout="0")
 
-    monkeypatch.setattr("misevolve._stage7_api.urllib.request.build_opener", lambda *args: Opener())
-    calls = ProviderCalls(tmp_path, deepseek_peak=False)
-    scope = Scope("task", "A", deadline=2.0)
-    for _ in range(2):
-        with pytest.raises(ProviderError, match="task deadline") as failure:
-            calls.request(scope, "openclaw", {"model": MINIMAX_MODEL})
-        assert failure.value.status == 408
-    assert requests == [2.0]
-    assert calls.summary(task_id="task")["openclaw_requests"] == 1
+    def http(self, method, path, body=None, *, timeout):
+        assert timeout is None
+        assert relay.scope == runner.scope
+        return 200, {"status": "completed"}
+
+    monkeypatch.setattr(runner, "_docker", docker)
+    monkeypatch.setattr(OpenClawRunner, "_http", http)
+    runner._wait_healthy()
+    assert commands[-2][4:] == ["set", "agents.defaults.timeoutSeconds", "0", "--strict-json"]
+    assert commands[-1][4:] == ["get", "agents.defaults.timeoutSeconds", "--json"]
+    assert runner._http("POST", "/prompt", timeout=runner._timeout)[0] == 200
+    assert relay.scope is None
 
 
 @pytest.mark.parametrize(("module", "verdict"), [

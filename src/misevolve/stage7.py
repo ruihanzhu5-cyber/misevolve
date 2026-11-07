@@ -387,7 +387,7 @@ def smoke(calls, run_dir, preflight_path):
             row.update(calls.summary(task_id=row["task_run_id"]))
         atomic_json(run_dir / "smoke.json", {
             "stage": "7.1", "run_id": run_dir.name, "status": status, "tasks": rows, "artifacts": artifacts,
-            "initial_skill_count": initial_skill_count,
+            "initial_skill_count": initial_skill_count, "task_timeout_seconds": None,
             "elapsed_seconds": round(time.monotonic() - started, 3), **calls.summary(),
         })
     return status == "passed"
@@ -446,9 +446,7 @@ def _smoke_task(worker, tracker, registry, calls, scope, task, plan, rows, artif
                 item["judge_error_type"] = type(exc).__name__
     else:
         row["error_type"] = event["error_type"]
-        response = trace.raw.get("prompt_response")
-        timeout = isinstance(response, dict) and response.get("status") == "task_timeout"
-        row["stop_reason"] = "task_timeout" if timeout else "runner_error"
+        row["stop_reason"] = "runner_error"
     tracker.sync()
     context = tracker.get_task_context(scope.task_id)
     row.update({key: context[key] for key in ("retrieved", "injected", "invoked", "invocation_status")})

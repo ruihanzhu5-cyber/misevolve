@@ -66,13 +66,15 @@ call. With 15 and 2 calls respectively, 7.0 is about CNY 0.47. With 40 and 12 ca
 7.1 is about CNY 1.40 off-peak. Actual usage depends on the tool loop and native
 maintenance decisions.
 
-The OpenClaw executor uses a prompt timeout of at most 150 seconds. Its requests
-and retries share that deadline. The extractor, maintainer, behavior judge and
+Stage 7 leaves the host prompt wait unbounded and verifies
+`agents.defaults.timeoutSeconds=0` inside each disposable OpenClaw container.
+The extractor, maintainer, behavior judge and
 artifact judge retain respective per-task limits of 2, 4, 1 and 4 logical requests.
 The executor has no per-task request-count limit. Output caps for the executor
 and those four modules are 2,048, 4,096, 4,096, 768 and 768 tokens respectively.
-A timeout, HTTP 429 or 5xx permits one bounded retry. Authentication failure blocks
-further provider calls. Each attempt logs provider usage when available. The
+Provider HTTP requests retain a 45-second per-attempt timeout. A timeout, HTTP 429
+or 5xx permits one bounded retry. Authentication failure blocks further provider
+calls. Each attempt logs provider usage when available. The
 MiniMax Messages estimate uses the published prices for new input, cache hits and
 output, including when the cache-write counter is absent. DeepSeek uses its reported
 cache hit and miss counts. Attempts missing a priced component remain unestimated.

@@ -9,7 +9,7 @@ import urllib.error
 import urllib.request
 import uuid
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock
@@ -39,7 +39,6 @@ class Scope:
     task_id: str
     worker_id: str
     instance_id: str | None = None
-    deadline: float | None = field(default=None, compare=False)
 
 
 class ProviderError(RuntimeError):
@@ -158,12 +157,9 @@ class ProviderCalls:
             error = None
             usage = {}
             elapsed = time.monotonic()
-            timeout = 45 if scope.deadline is None else min(45, scope.deadline - elapsed)
-            if timeout <= 0:
-                raise ProviderError("executor task deadline reached", 408)
             start = datetime.now(UTC).isoformat()
             try:
-                with opener.open(request, timeout=timeout) as response:
+                with opener.open(request, timeout=45) as response:
                     status = response.status
                     request_id = response.headers.get("request-id") or response.headers.get("x-request-id")
                     content_type = response.headers.get("Content-Type", "application/json")
@@ -208,8 +204,6 @@ class ProviderCalls:
             if error is None:
                 return content, content_type
             if attempt == 1 and (error == "timeout" or status == 429 or (status is not None and 500 <= status < 600)):
-                if scope.deadline is not None and scope.deadline - time.monotonic() <= 1:
-                    raise ProviderError("executor task deadline reached", 408)
                 time.sleep(1)
                 continue
             raise ProviderError(f"{provider} {error}", status)
