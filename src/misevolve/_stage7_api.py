@@ -11,6 +11,9 @@ import uuid
 from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from hashlib import sha256
+from http.client import IncompleteRead
+from io import BytesIO
 from pathlib import Path
 from threading import Lock
 
@@ -24,9 +27,15 @@ DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
 DEEPSEEK_PRICE = "https://api-docs.deepseek.com/zh-cn/quick_start/pricing/"
 PRICE_DATE = "2026-11-07"
 INPUT_BYTES = 256_000
+OPENCLAW_INPUT_BYTES = 8 * 1024 * 1024
+OPENCLAW_STREAM_BYTES = 128 * 1024 * 1024
+OPENCLAW_CONTEXT = 204800
+OPENCLAW_OUTPUT = 131072
+REQUEST_TIMEOUT = 45
+RETRYABLE_TRANSPORT = {"timeout", "transport_error"}
 LIMITS = {
     # Per task and module. The pair gives logical calls and maximum output tokens per call.
-    "openclaw": (None, 2048),
+    "openclaw": (None, OPENCLAW_OUTPUT),
     "extractor": (2, 4096),
     "maintainer": (4, 4096),
     "behavior_judge": (1, 768),
@@ -51,20 +60,80 @@ def _number(value):
     return value if type(value) is int and value >= 0 else None
 
 
-def _usage(body: bytes, *, streaming: bool, deepseek: bool) -> tuple[dict, str | None]:
+def _stream_events(body):
+    for line in BytesIO(body):
+        if line.startswith(b"data:") and (value := line[5:].strip()) not in (b"", b"[DONE]"):
+            yield json.loads(value)
+
+
+def _tool_stream_evidence(block, fragments, closed):
+    reason = None
+    error_offset = None
+    if not closed:
+        reason = "missing_block_stop"
+    else:
+        try:
+            args = json.loads("".join(fragments)) if fragments else block.get("input")
+            if not isinstance(args, dict):
+                reason = "expected_json_object"
+        except json.JSONDecodeError as exc:
+            reason, error_offset = "invalid_json", exc.pos
+    tool_id = block.get("id")
+    tool_name = block.get("name")
+    return {
+        "id_hash": sha256(tool_id.encode()).hexdigest() if isinstance(tool_id, str) else None,
+        "name": tool_name if tool_name in ("exec", "read", "write", "edit") else "unknown",
+        "fragments": len(fragments),
+        "argument_bytes": sum(len(part.encode("utf-8")) for part in fragments),
+        "argument_error": reason, "json_error_offset": error_offset,
+    }
+
+
+def _stream_usage(body, details):
+    types = set()
+    counts = {}
+    model = None
+    blocks = {}
+    closed = set()
+    stop_reason = None
+    for event in _stream_events(body):
+        kind = event.get("type")
+        types.add(kind)
+        counts.update(event.get("usage") or {})
+        if kind == "message_start":
+            message = event.get("message", {})
+            counts.update(message.get("usage") or {})
+            model = message.get("model")
+        if details is None:
+            continue
+        index = event.get("index")
+        if kind == "content_block_start" and event.get("content_block", {}).get("type") == "tool_use":
+            blocks[index] = (event["content_block"], [])
+        if kind == "content_block_delta" and index in blocks:
+            delta = event.get("delta", {})
+            if delta.get("type") == "input_json_delta":
+                blocks[index][1].append(delta["partial_json"])
+        if kind == "content_block_stop":
+            closed.add(index)
+        if kind == "message_delta":
+            stop_reason = event.get("delta", {}).get("stop_reason") or stop_reason
+    if details is not None:
+        details.update({
+            "message_stop": "message_stop" in types,
+            "stop_reason": stop_reason if stop_reason in (
+                "end_turn", "max_tokens", "tool_use", "stop_sequence", "pause_turn", "refusal",
+            ) else None,
+            "tool_blocks": [_tool_stream_evidence(block, parts, index in closed)
+                            for index, (block, parts) in blocks.items()] if "message_stop" in types else [],
+        })
+    if "message_stop" not in types or "error" in types:
+        raise ProviderError("incomplete provider stream")
+    return counts, model
+
+
+def _usage(body: bytes, *, streaming: bool, deepseek: bool, details=None) -> tuple[dict, str | None]:
     if streaming:
-        events = [
-            json.loads(line[5:].strip()) for line in body.splitlines()
-            if line.startswith(b"data:") and line[5:].strip() not in (b"", b"[DONE]")
-        ]
-        types = {event.get("type") for event in events}
-        if "message_stop" not in types or "error" in types:
-            raise ProviderError("incomplete provider stream")
-        message = next((event.get("message", {}) for event in events if event.get("type") == "message_start"), {})
-        counts = dict(message.get("usage") or {})
-        for event in events:
-            counts.update(event.get("usage") or {})
-        response_model = message.get("model")
+        counts, response_model = _stream_usage(body, details)
     else:
         message = json.loads(body)
         if message.get("error") or (message.get("base_resp") or {}).get("status_code", 0):
@@ -122,19 +191,22 @@ class ProviderCalls:
         if missing:
             raise ValueError(f"missing credentials: {', '.join(missing)}")
 
-    def request(self, scope: Scope, module: str, payload: dict) -> tuple[bytes, str]:
+    def request(self, scope: Scope, module: str, payload: dict, *, correction=None) -> tuple[bytes, str]:
         max_calls, max_output = LIMITS[module]
+        executor = module == "openclaw"
         deepseek = module.endswith("_judge")
         model = DEEPSEEK_MODEL if deepseek else MINIMAX_MODEL
         provider = "deepseek" if deepseek else "minimax"
         if payload.get("model") != model:
             raise ProviderError("unexpected model")
         limit = payload.get("max_tokens", max_output)
-        if type(limit) is not int or limit < 1:
+        if type(limit) is not int or limit < 1 or (executor and limit > max_output):
             raise ProviderError("invalid max_tokens")
-        payload = {**payload, "max_tokens": min(limit, max_output)}
+        payload = {**payload, "max_tokens": limit if executor else min(limit, max_output)}
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        if len(body) > INPUT_BYTES:
+        input_limit = OPENCLAW_INPUT_BYTES if executor else INPUT_BYTES
+        response_limit = OPENCLAW_STREAM_BYTES if executor else 2_000_000
+        if len(body) > input_limit:
             raise ProviderError("input exceeds Stage 7 request limit")
         key = os.environ[f"{provider.upper()}_API_KEY"].strip()
         url = DEEPSEEK_URL if deepseek else MINIMAX_URL
@@ -156,28 +228,29 @@ class ProviderCalls:
             status = request_id = response_model = None
             error = None
             usage = {}
+            stream = {} if executor else None
             elapsed = time.monotonic()
             start = datetime.now(UTC).isoformat()
             try:
-                with opener.open(request, timeout=45) as response:
+                with opener.open(request, timeout=REQUEST_TIMEOUT) as response:
                     status = response.status
                     request_id = response.headers.get("request-id") or response.headers.get("x-request-id")
                     content_type = response.headers.get("Content-Type", "application/json")
-                    content = response.read(2_000_001)
-                if len(content) > 2_000_000:
+                    content = response.read(response_limit + 1)
+                if len(content) > response_limit:
                     raise ProviderError("provider response exceeded limit")
                 usage, response_model = _usage(
-                    content, streaming="text/event-stream" in content_type, deepseek=deepseek,
+                    content, streaming="text/event-stream" in content_type, deepseek=deepseek, details=stream,
                 )
             except urllib.error.HTTPError as exc:
                 status = exc.code
                 request_id = exc.headers.get("request-id") or exc.headers.get("x-request-id")
                 exc.close()
                 error = "http_error"
-            except (TimeoutError, urllib.error.URLError) as exc:
+            except (TimeoutError, urllib.error.URLError, ConnectionError, IncompleteRead) as exc:
                 reason = getattr(exc, "reason", exc)
                 error = "timeout" if isinstance(reason, TimeoutError) else "transport_error"
-            except (ValueError, AttributeError, ProviderError):
+            except (ValueError, TypeError, KeyError, AttributeError, ProviderError):
                 error = "invalid_response"
 
             cost = _estimate(usage, deepseek=deepseek, peak=self.deepseek_peak)
@@ -189,7 +262,9 @@ class ProviderCalls:
                 "started_at": start, "elapsed_seconds": round(time.monotonic() - elapsed, 4),
                 "status": error or "ok", "http_status": status,
                 "request_bytes": len(body), "input_token_estimate": len(body),
+                "requested_max_tokens": limit,
                 "max_output_tokens": payload["max_tokens"],
+                "stream": stream, "tool_argument_correction": correction,
                 **{name: usage.get(name) for name in (
                     "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "cache_miss_tokens",
                 )},
@@ -203,7 +278,8 @@ class ProviderCalls:
                 append_jsonl(self.path, row)
             if error is None:
                 return content, content_type
-            if attempt == 1 and (error == "timeout" or status == 429 or (status is not None and 500 <= status < 600)):
+            if attempt == 1 and (error in RETRYABLE_TRANSPORT or status == 429
+                                 or (status is not None and 500 <= status < 600)):
                 time.sleep(1)
                 continue
             raise ProviderError(f"{provider} {error}", status)
@@ -215,10 +291,24 @@ class ProviderCalls:
             attempts = [row for row in attempts if row["task_id"] == task_id]
         costs = [row["cost"] for row in attempts if row["cost"] is not None]
         counts = Counter(row["module"] for row in attempts)
+        openclaw = [row for row in attempts if row["module"] == "openclaw"]
+        streams = [row.get("stream") or {} for row in openclaw]
         return {
             "provider_attempts": len(attempts),
             "successful_attempts": sum(row["status"] == "ok" for row in attempts),
             "openclaw_requests": counts["openclaw"],
+            "openclaw_request_max_tokens": sorted({row["max_output_tokens"] for row in openclaw}),
+            "openclaw_output_truncations": sum(stream.get("stop_reason") == "max_tokens" for stream in streams),
+            "malformed_tool_blocks": sum(
+                block["argument_error"] is not None for stream in streams for block in stream.get("tool_blocks", [])
+            ),
+            "tool_argument_corrections": dict(Counter(
+                row["tool_argument_correction"] for row in openclaw
+                if row.get("tool_argument_correction") and row["attempt"] == 1
+            )),
+            "provider_retries": sum(row["attempt"] > 1 for row in attempts),
+            "provider_timeouts": sum(row["status"] == "timeout" for row in attempts),
+            "provider_transport_errors": sum(row["status"] == "transport_error" for row in attempts),
             "attempts_by_module": dict(counts),
             "cost_estimate_cny": round(sum(costs), 9) if costs or not attempts else None,
             "attempts_with_cost": len(costs),

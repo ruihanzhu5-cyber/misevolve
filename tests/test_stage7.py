@@ -7,9 +7,9 @@ from urllib.error import HTTPError
 import pytest
 
 from misevolve._stage7_api import DEEPSEEK_MODEL, MINIMAX_MODEL, ProviderCalls, ProviderError, Scope, _usage
-from misevolve._stage7_openclaw import Stage7Runner, tool_round_trip
+from misevolve._stage7_openclaw import Stage7Runner, _Relay, execution_evidence, tool_round_trip
 from misevolve.adapters.openclaw_runner import OpenClawRunner
-from misevolve.multiagent._io import read_jsonl
+from misevolve.multiagent._io import append_jsonl, read_jsonl
 from misevolve.paths import repo_root
 from misevolve.stage7 import _benign_tasks, _complete_smoke, _judge, preflight
 
@@ -71,7 +71,7 @@ def test_stream_usage_uses_cumulative_provider_values():
         _usage(stream.split(b'data: {"type": "message_stop"}')[0], streaming=True, deepseek=False)
 
 
-def test_openclaw_has_no_request_count_cap_and_prices_streams_without_cache_write(tmp_path, monkeypatch):
+def test_openclaw_preserves_output_budget_and_has_no_request_count_cap(tmp_path, monkeypatch):
     monkeypatch.setenv("MINIMAX_API_KEY", "synthetic-key")
     stream = (
         b'data: {"type":"message_start","message":{"model":"MiniMax-M3.1-Flash",'
@@ -94,14 +94,90 @@ def test_openclaw_has_no_request_count_cap_and_prices_streams_without_cache_writ
     calls = ProviderCalls(tmp_path, deepseek_peak=False)
     scope = Scope("task", "A")
     for _ in range(20):
-        calls.request(scope, "openclaw", {"model": MINIMAX_MODEL, "max_tokens": 9999})
+        calls.request(scope, "openclaw", {"model": MINIMAX_MODEL, "max_tokens": 131072})
     assert len(requests) == 20
-    assert all(body["max_tokens"] == 2048 and timeout == 45 for body, timeout in requests)
+    assert all(body["max_tokens"] == 131072 and timeout == 45 for body, timeout in requests)
     summary = calls.summary(task_id="task")
     assert summary["openclaw_requests"] == summary["attempts_with_cost"] == 20
     assert summary["cost_estimate_cny"] == pytest.approx(20 * 0.0000525)
     assert calls.summary(task_id="another")["openclaw_requests"] == 0
     assert all(row["cache_write_tokens"] is None for row in read_jsonl(calls.path))
+
+
+def _tool_stream(*, truncated):
+    events = [{"type": "message_start", "message": {"model": MINIMAX_MODEL}}]
+    for index in (0, 1):
+        events.append({"type": "content_block_start", "index": index, "content_block": {
+            "type": "tool_use", "id": f"synthetic-{index}", "name": "exec", "input": {},
+        }})
+    for index, part in ((0, '{"command":"'), (1, '{"command":"'), (0, 'FIRST"}'), (1, "SECOND")):
+        events.append({"type": "content_block_delta", "index": index, "delta": {
+            "type": "input_json_delta", "partial_json": part,
+        }})
+    if not truncated:
+        events.append({"type": "content_block_delta", "index": 1, "delta": {
+            "type": "input_json_delta", "partial_json": '"}',
+        }})
+    events.extend({"type": "content_block_stop", "index": index} for index in (0, 1))
+    events += [
+        {"type": "message_delta", "delta": {"stop_reason": "max_tokens" if truncated else "tool_use"},
+         "usage": {"output_tokens": 2048 if truncated else 2050}},
+        {"type": "message_stop"},
+    ]
+    return "".join(f"data: {json.dumps(event)}\n\n" for event in events).encode()
+
+
+@pytest.mark.parametrize("prior_result,native_used,expected_retry", [
+    (True, False, True), (False, False, False), (True, True, False),
+])
+def test_b05_replay_continues_same_session_only_after_settled_tools(
+    tmp_path, monkeypatch, prior_result, native_used, expected_retry,
+):
+    broken, regenerated = {}, {}
+    _usage(_tool_stream(truncated=True), streaming=True, deepseek=False, details=broken)
+    _usage(_tool_stream(truncated=False), streaming=True, deepseek=False, details=regenerated)
+    assert broken["message_stop"] and broken["stop_reason"] == "max_tokens"
+    assert [block["argument_error"] for block in broken["tool_blocks"]] == [None, "invalid_json"]
+    assert all(block["argument_error"] is None for block in regenerated["tool_blocks"])
+    assert "SECOND" not in json.dumps(broken)
+    calls = ProviderCalls(tmp_path, deepseek_peak=False)
+    scope = Scope("b05", "A")
+    append_jsonl(calls.path, {"task_id": "b05", "module": "openclaw", "status": "ok", "stream": broken})
+    history = [{"message": {"role": "assistant", "content": [{"type": "toolCall", "id": "settled"}]}}]
+    if prior_result:
+        history.append({"message": {"role": "toolResult", "toolCallId": "settled"}})
+    if native_used:
+        history.append({"message": {"role": "user", "provenance": {"kind": "internal"}, "content": [
+            {"type": "text", "text": "The previous assistant turn's tool call was rejected before it ran."},
+        ]}})
+    history.append({"message": {
+        "role": "assistant", "stopReason": "error", "content": [],
+        "errorMessage": "Provider completed tool call with malformed JSON arguments",
+    }})
+    sent = []
+    with _Relay(("127.0.0.1", 0), calls) as relay:
+        runner = Stage7Runner("mock", relay)
+        runner.scope = scope
+        assert execution_evidence(history)["native_tool_argument_corrections"] == int(native_used)
+
+        def http(self, method, path, body=None, *, timeout):
+            if method == "GET":
+                return 200, {"history": history}
+            sent.append(body)
+            if len(sent) == 1:
+                return 500, {}
+            assert relay.take_correction(scope) == "stage7"
+            assert relay.take_correction(scope) is None
+            return 200, {"status": "completed"}
+
+        monkeypatch.setattr(OpenClawRunner, "_http", http)
+        code, _ = runner._http("POST", "/prompt", {"session_id": "original", "prompt": "B05"}, timeout=None)
+    assert (code == 200) == expected_retry
+    assert len(sent) == 1 + expected_retry
+    if expected_retry:
+        assert sent[-1]["session_id"] == "original"
+        assert "do not repeat completed calls" in sent[-1]["prompt"]
+        assert "SECOND" not in sent[-1]["prompt"]
 
 
 def test_stage7_disables_the_prompt_wait_and_gateway_deadline(monkeypatch):
@@ -112,9 +188,14 @@ def test_stage7_disables_the_prompt_wait_and_gateway_deadline(monkeypatch):
     commands = []
     monkeypatch.setattr(OpenClawRunner, "_wait_healthy", lambda _: None)
 
+    settings = {
+        "model": MINIMAX_MODEL, "api": "anthropic-messages", "context_window": 204800, "max_tokens": 131072,
+        "env_context_window": 204800, "env_max_tokens": 131072, "request_max_tokens": 131072,
+    }
+
     def docker(args, **kwargs):
         commands.append(args)
-        return SimpleNamespace(stdout="0")
+        return SimpleNamespace(stdout=json.dumps(settings) if "env_max_tokens" in args[-1] else "0")
 
     def http(self, method, path, body=None, *, timeout):
         assert timeout is None
@@ -122,11 +203,14 @@ def test_stage7_disables_the_prompt_wait_and_gateway_deadline(monkeypatch):
         return 200, {"status": "completed"}
 
     monkeypatch.setattr(runner, "_docker", docker)
+    monkeypatch.setattr(runner, "_tool_correction", lambda _: None)
     monkeypatch.setattr(OpenClawRunner, "_http", http)
     runner._wait_healthy()
-    assert commands[-2][4:] == ["set", "agents.defaults.timeoutSeconds", "0", "--strict-json"]
-    assert commands[-1][4:] == ["get", "agents.defaults.timeoutSeconds", "--json"]
-    assert runner._http("POST", "/prompt", timeout=runner._timeout)[0] == 200
+    assert runner.model_config == settings
+    assert commands[-4][4:] == ["set", "agents.defaults.timeoutSeconds", "0", "--strict-json"]
+    assert commands[-3][4:] == ["get", "agents.defaults.timeoutSeconds", "--json"]
+    assert commands[-2][4:] == ["set", "agents.defaults.params.maxTokens", "131072", "--strict-json"]
+    assert runner._http("POST", "/prompt", {"session_id": "test"}, timeout=runner._timeout)[0] == 200
     assert relay.scope is None
 
 
@@ -160,19 +244,29 @@ def test_tool_round_trip_requires_matching_tool_result_and_followup():
     assert tool_round_trip([start, match, finish], marker="sentinel")
 
 
-def test_stage7_smoke_requires_native_revision_after_retrieval():
+def test_stage7_smoke_requires_task_success_and_native_retrieval_and_injection():
     tasks = _benign_tasks()
     assert [task["label"] for task in tasks] == [
         "healthz-endpoint", "startup-config-validation", "config-validation-module",
     ]
     assert {task["kind"] for task in tasks} == {"B"}
-    rows = [{"task_run_id": str(i), "execution_ok": True, "behavior": {}, "tool_round_trip": i == 0, "retrieved": []}
-            for i in range(3)]
+    rows = [{
+        "pos": task["pos"], "task_run_id": str(i), "execution_ok": True, "behavior_judge_valid": True,
+        "task_success": True, "tool_round_trip": i == 0, "retrieved": [], "injected": [],
+        "native_write_ids": ["first"] if i == 0 else [],
+    } for i, task in enumerate(tasks)]
     first = {"task_id": "0", "global_skill_id": "first", "native_revision_parent_id": None, "verdict": {}}
-    second = {"task_id": "1", "global_skill_id": "second", "native_revision_parent_id": "first", "verdict": {}}
+    second = {"task_id": "1", "global_skill_id": "second", "native_revision_parent_id": None, "verdict": {}}
     assert not _complete_smoke(rows, [first, second])
-    rows[1]["retrieved"] = [{"global_skill_id": "first"}]
+    for row in rows[1:]:
+        row["retrieved"] = [{"global_skill_id": "first", "resolution_status": "confirmed"}]
+        row["injected"] = [{"global_skill_id": "first", "resolution_status": "confirmed"}]
+    rows[2]["task_success"] = False
+    assert not _complete_smoke(rows, [first, second])
+    rows[2]["task_success"] = True
     assert _complete_smoke(rows, [first, second])
+    rows[1]["injected"][0]["resolution_status"] = "unknown"
+    assert not _complete_smoke(rows, [first, second])
 
 
 def test_partial_preflight_resumes_without_repeating_provider_checks(tmp_path, monkeypatch):

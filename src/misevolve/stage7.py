@@ -13,8 +13,28 @@ import uuid
 from pathlib import Path
 
 from . import harness
-from ._stage7_api import DEEPSEEK_MODEL, LIMITS, MINIMAX_MODEL, ProviderCalls, ProviderError, Scope
-from ._stage7_openclaw import BACKBONE, IMAGE, OPENCLAW_VERSION, Stage7Runner, isolated_relay, tool_round_trip
+from ._stage7_api import (
+    DEEPSEEK_MODEL,
+    LIMITS,
+    MINIMAX_MODEL,
+    OPENCLAW_CONTEXT,
+    OPENCLAW_INPUT_BYTES,
+    OPENCLAW_OUTPUT,
+    OPENCLAW_STREAM_BYTES,
+    REQUEST_TIMEOUT,
+    ProviderCalls,
+    ProviderError,
+    Scope,
+)
+from ._stage7_openclaw import (
+    BACKBONE,
+    IMAGE,
+    OPENCLAW_VERSION,
+    Stage7Runner,
+    execution_evidence,
+    isolated_relay,
+    tool_round_trip,
+)
 from .adapters.openclaw_runner import OpenClawRunner
 from .judges.artifact import RUBRIC
 from .judges.behavioral import _serialize_traj
@@ -345,6 +365,20 @@ def _benign_tasks():
     return selected
 
 
+def _smoke_configuration(calls):
+    return {
+        "executor_model": MINIMAX_MODEL, "evolution_model": MINIMAX_MODEL, "judge_model": DEEPSEEK_MODEL,
+        "deepseek_band": "peak" if calls.deepseek_peak else "off-peak",
+        "openclaw_context_window": OPENCLAW_CONTEXT, "openclaw_max_output_tokens": OPENCLAW_OUTPUT,
+        "openclaw_input_bytes": OPENCLAW_INPUT_BYTES, "openclaw_stream_bytes": OPENCLAW_STREAM_BYTES,
+        "openclaw_task_request_limit": None, "task_timeout_seconds": None, "total_cost_limit_cny": None,
+        "provider_timeout_seconds": REQUEST_TIMEOUT, "provider_retries_per_request": 1,
+        "retry_on": ["timeout", "transport_error", "http_429", "http_5xx"],
+        "tool_argument_corrections_per_task": 1, "module_request_and_output_limits": LIMITS,
+        "stop_conditions": ["agent_terminal_state", "authentication_failure", "unrecovered_provider_or_tool_error"],
+    }
+
+
 def smoke(calls, run_dir, preflight_path):
     proof = json.loads(preflight_path.read_text(encoding="utf-8"))
     if (proof.get("stage") != "7.0" or proof.get("passed") is not True or proof.get("runtime") != _runtime()
@@ -356,6 +390,9 @@ def smoke(calls, run_dir, preflight_path):
              "prompt_hash": hashlib.sha256(t["prompt"].encode("utf-8")).hexdigest()} for t in tasks]
     atomic_json(run_dir / "smoke_plan.json", {"episode": EPISODE, "tasks": plan,
                                              "reason": "Related service health and startup config diagnostics."})
+    config = _smoke_configuration(calls)
+    atomic_json(run_dir / "smoke_configuration.json", config)
+    print(json.dumps(config, sort_keys=True), flush=True)
     rows = []
     artifacts = []
     started = time.monotonic()
@@ -383,20 +420,32 @@ def smoke(calls, run_dir, preflight_path):
                 worker.method.teardown()
                 runner.teardown()
     finally:
+        summary = calls.summary()
         for row in rows:
             row.update(calls.summary(task_id=row["task_run_id"]))
+            if row["native_tool_argument_corrections"]:
+                row["tool_argument_corrections"]["native"] = row["native_tool_argument_corrections"]
+        native_corrections = sum(row["native_tool_argument_corrections"] for row in rows)
+        if native_corrections:
+            summary["tool_argument_corrections"]["native"] = native_corrections
         atomic_json(run_dir / "smoke.json", {
             "stage": "7.1", "run_id": run_dir.name, "status": status, "tasks": rows, "artifacts": artifacts,
-            "initial_skill_count": initial_skill_count, "task_timeout_seconds": None,
-            "elapsed_seconds": round(time.monotonic() - started, 3), **calls.summary(),
+            "initial_skill_count": initial_skill_count, "task_timeout_seconds": config["task_timeout_seconds"],
+            "configuration": config, "native_revision_observed": any(
+                item["native_revision_parent_id"] is not None for item in artifacts
+            ),
+            "elapsed_seconds": round(time.monotonic() - started, 3), **summary,
         })
     return status == "passed"
 
 
 def _smoke_task(worker, tracker, registry, calls, scope, task, plan, rows, artifacts):
     method = worker.method
-    row = {**plan, "task_run_id": scope.task_id, "behavior": None, "tool_round_trip": False,
-           "execution_ok": False, "error_type": None, "stop_reason": "incomplete", "evolution_event_ids": []}
+    row = {**plan, "task_run_id": scope.task_id, "behavior": None, "behavior_judge_valid": False,
+           "task_success": None, "tool_round_trip": False, "execution_ok": False, "error_type": None,
+           "stop_reason": "incomplete", "evolution_event_ids": [], "native_write_ids": [], "maintenance": [],
+           "terminal_stop_reason": None, "tool_calls": 0, "tool_results": 0,
+           "native_tool_argument_corrections": 0}
     rows.append(row)
     try:
         trace = method.run_task(
@@ -409,23 +458,29 @@ def _smoke_task(worker, tracker, registry, calls, scope, task, plan, rows, artif
             raise
         row["error_type"] = type(exc).__name__
         row["stop_reason"] = "runner_error"
-        tracker.sync()
+        _smoke_context(tracker, scope, row)
         return
     event = _task_execution(method._exchange.task_path, scope.task_id)
     if event is None:
         raise ValueError("task execution evidence missing")
-    row["execution_ok"] = event["execution_status"] == "completed"
     row["session_id"] = trace.raw.get("session_id")
-    if row["execution_ok"]:
-        row["stop_reason"] = "completed"
-        history = trace.raw.get("history") or []
-        row["tool_round_trip"] = tool_round_trip(history)
+    row["container_model_configuration"] = worker.runner.model_config
+    history = trace.raw.get("history") or []
+    row.update(execution_evidence(history))
+    row["tool_round_trip"] = tool_round_trip(history)
+    runner_completed = event["execution_status"] == "completed" and not trace.raw.get("prompt_error")
+    terminal = row["terminal_stop_reason"]
+    row["execution_ok"] = runner_completed and terminal in ("stop", "end_turn", "stop_sequence")
+    row["stop_reason"] = "completed" if row["execution_ok"] else terminal or "runner_error"
+    if runner_completed:
         try:
             row["behavior"] = _judge(calls, scope, "behavior_judge", _behavior_prompt(task["prompt"], history),
                                      tracker.run_dir / "judge_results.jsonl")
         except (ProviderError, ValueError, KeyError, TypeError) as exc:
             row["error_type"] = type(exc).__name__
         verdict = row["behavior"] or {}
+        row["behavior_judge_valid"] = row["behavior"] is not None
+        row["task_success"] = verdict.get("task_success")
         method.evolve_batch([trace], [harness.TaskOutcome(verdict.get("harmful"), verdict.get("task_success"))],
                             kind="B", round_idx=task["round"])
         row["evolution_event_ids"] = [event["event_id"] for event in method._last_evolution_events]
@@ -437,6 +492,7 @@ def _smoke_task(worker, tracker, registry, calls, scope, task, plan, rows, artif
                 "native_revision_parent_id": artifact.native_revision_parent_id, "verdict": None,
             }
             artifacts.append(item)
+            row["native_write_ids"].append(artifact.global_skill_id)
             try:
                 item["verdict"] = _judge(
                     calls, scope, "artifact_judge", RUBRIC % artifact.skill_files["SKILL.md"][:6000],
@@ -444,9 +500,36 @@ def _smoke_task(worker, tracker, registry, calls, scope, task, plan, rows, artif
                 )
             except (ProviderError, ValueError, KeyError, TypeError) as exc:
                 item["judge_error_type"] = type(exc).__name__
+        row["maintenance"] = _maintenance_evidence(worker.episode_dir / "native_responses.jsonl", scope)
     else:
         row["error_type"] = event["error_type"]
-        row["stop_reason"] = "runner_error"
+    _smoke_context(tracker, scope, row)
+
+
+def _maintenance_evidence(path, scope):
+    decisions = []
+    for row in read_jsonl(path):
+        if row["task_id"] != scope.task_id or row["module"] != "maintainer":
+            continue
+        text = row["response"].strip()
+        if text.startswith("```") and text.endswith("```"):
+            text = text.partition("\n")[2][:-3].strip()
+        try:
+            decision = json.loads(text)
+        except ValueError:
+            decision = {}
+        if not isinstance(decision, dict):
+            decision = {}
+        action = decision.get("action")
+        same = decision.get("same_capability")
+        decisions.append({
+            "action": action if action in ("add", "keep", "update", "merge", "discard", "skip", "reject") else None,
+            "same_capability": same if type(same) is bool else None,
+        })
+    return decisions
+
+
+def _smoke_context(tracker, scope, row):
     tracker.sync()
     context = tracker.get_task_context(scope.task_id)
     row.update({key: context[key] for key in ("retrieved", "injected", "invoked", "invocation_status")})
@@ -454,16 +537,16 @@ def _smoke_task(worker, tracker, registry, calls, scope, task, plan, rows, artif
 
 
 def _complete_smoke(rows, artifacts):
-    by_task = {row["task_run_id"]: row for row in rows}
-    by_global_id = {item["global_skill_id"]: item for item in artifacts}
-    revision = False
-    for item in artifacts:
-        parent = by_global_id.get(item["native_revision_parent_id"])
-        task = by_task[item["task_id"]]
-        if parent and item["task_id"] != parent["task_id"] and by_task[parent["task_id"]]["tool_round_trip"]:
-            revision |= any(ref["global_skill_id"] == parent["global_skill_id"] for ref in task["retrieved"])
-    return (len(rows) == 3 and all(row["execution_ok"] and row["behavior"] is not None for row in rows)
-            and revision and all(item["verdict"] is not None for item in artifacts))
+    if [row["pos"] for row in rows] != list(BENIGN_POSITIONS) or not all(
+        row["execution_ok"] and row["behavior_judge_valid"] and row["task_success"] is True for row in rows
+    ):
+        return False
+    shared = set(rows[0]["native_write_ids"])
+    for row in rows[1:]:
+        for key in ("retrieved", "injected"):
+            shared.intersection_update(ref["global_skill_id"] for ref in row[key]
+                                       if ref["resolution_status"] == "confirmed")
+    return bool(shared and rows[0]["tool_round_trip"] and all(item["verdict"] is not None for item in artifacts))
 
 
 def main():

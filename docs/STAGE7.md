@@ -38,8 +38,9 @@ Before any OpenClaw inference, the offline isolation check can be retried after
 an image fix. The previous attempt is retained in `preflight_retries.jsonl`.
 
 The runner uses a fresh container and session per task on an internal Docker bridge.
-The host-side relay forwards only model messages, restricts the model and output
-size, and supplies the provider credential. The container receives a per-relay token.
+The host-side relay forwards only model messages, fixes the model, validates the
+requested output size, and supplies the provider credential. The container receives
+a per-relay token.
 Preflight boots four Worker containers, checks their active session stores are initially
 empty, and inserts isolated session and Skill Store markers. The adapter reads current
 OpenClaw transcripts through the Gateway. The paid tool check requires a matching
@@ -48,9 +49,13 @@ tool call, returned tool result, and subsequent assistant message.
 The Stage 7.1 plan uses `skillmisevo-coding-04-B04`, `-B05` and `-B17` in that order.
 They cover related service health, startup diagnostics and config validation. Their
 original prompts are passed directly to the runner. Each completed task gets an
-AutoSkill evolution boundary before the next task starts. An actual revision and
-retrieval of its predecessor are required for a full pass. Each provider's API
-attempts and the separate judge verdicts are retained even when the smoke is partial.
+AutoSkill evolution boundary before the next task starts. The smoke requires normal
+execution and a valid behavior verdict with `task_success=true` for all three
+tasks. B04 must write a Skill through AutoSkill after a tool round trip, and both
+later sessions must retrieve and inject the same registered version. Artifact
+verdicts are required for written versions. Confirmed invocation and native
+revision are reported separately. Revision evidence requires a predecessor
+recorded in the Registry.
 
 ## Usage and pricing
 
@@ -68,13 +73,32 @@ maintenance decisions.
 
 Stage 7 leaves the host prompt wait unbounded and verifies
 `agents.defaults.timeoutSeconds=0` inside each disposable OpenClaw container.
-The extractor, maintainer, behavior judge and
-artifact judge retain respective per-task limits of 2, 4, 1 and 4 logical requests.
-The executor has no per-task request-count limit. Output caps for the executor
-and those four modules are 2,048, 4,096, 4,096, 768 and 768 tokens respectively.
-Provider HTTP requests retain a 45-second per-attempt timeout. A timeout, HTTP 429
-or 5xx permits one bounded retry. Authentication failure blocks further provider
-calls. Each attempt logs provider usage when available. The
+The smoke prints its effective configuration before starting the first task.
+The executor has no per-task request-count limit, task timeout, or total fee cap.
+Stage 7 uses a context window of 204,800 and an output budget of 131,072, following
+the original config mapper's fallbacks. The MiniMax-M3.1-Flash API advertises a
+1,000,000-token context window. Stage 7 verifies its smaller local window and
+output budget against the container environment and generated model configuration.
+An explicit `agents.defaults.params.maxTokens` setting selects the same budget
+for the Anthropic transport, whose default can be lower than the model limit.
+The relay forwards valid executor `max_tokens` unchanged and records the wire
+value. It limits executor HTTP request bodies to 8 MiB and buffered responses to
+128 MiB. [Original config mapper](https://github.com/henrymao2004/misevolve/blob/71fbaff8a79c2e365c3dbc6e3865a07fa8719aed/docker/openclaw/config_mapper.py)
+[MiniMax Anthropic compatibility](https://platform.minimax.cn/docs/api-reference/text-anthropic-api)
+
+The extractor, maintainer, behavior judge and artifact judge retain respective
+per-task limits of 2, 4, 1 and 4 logical requests. Their output caps are 4,096,
+4,096, 768 and 768 tokens. Provider HTTP requests retain a 45-second timeout.
+A timeout, transport error, HTTP 429 or 5xx permits one retry. Authentication
+failure blocks further provider calls. Tool-argument regeneration has a separate
+one-attempt allowance per task. The relay preserves provider stream bytes and
+records the terminal event and JSON status for each tool block. OpenClaw gets the
+first opportunity to recover. If it terminates after rejecting an invalid call,
+Stage 7 can ask for a regenerated call in the same session when the rejected call
+never dispatched and prior tool calls have matching results. The runner does not
+replay prior tool calls.
+
+Each attempt logs provider usage when available. The
 MiniMax Messages estimate uses the published prices for new input, cache hits and
 output, including when the cache-write counter is absent. DeepSeek uses its reported
 cache hit and miss counts. Attempts missing a priced component remain unestimated.
@@ -84,5 +108,6 @@ See [MiniMax cache billing](https://platform.minimax.cn/docs/api-reference/text-
 `judge_results.jsonl` holds validated verdicts and failures. Provenance, Registry,
 worker journals and native responses are retained in the run directory. Archive
 only sanitized reports and metadata when sharing outside the run host.
-`smoke.json` summarizes each task's actual executor request count, all provider
-attempts, estimated cost coverage, stop reason, and native evolution event IDs.
+`smoke.json` records each task's executor requests, tool calls and results,
+transport retries, format corrections, output truncations, estimated cost
+coverage, execution and judge outcomes, and native Skill write and retrieval evidence.
