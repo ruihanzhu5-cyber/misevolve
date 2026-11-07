@@ -15,7 +15,7 @@ from pathlib import Path
 
 from ._io import append_jsonl, canonical_json, read_jsonl
 from .exchange import imported_files, skill_reference
-from .models import content_hash
+from .models import content_hash, skill_version_key
 from .models import valid_evidence as _explicit
 from .registry import GlobalSkillRegistry
 
@@ -103,6 +103,8 @@ class ProvenanceTracker:
             "kind": "local_skill_version", "worker_id": worker_id,
             "local_skill_id": compact["local_skill_id"], "content_hash": digest,
         }
+        if compact.get("resource_files"):
+            local["resource_files"] = compact["resource_files"]
         self._emit(source, "reference_observed", local, {"kind": "reference"}, worker_id=worker_id,
                    task_run_id=task_run_id, evidence_status="observed", origin=compact["origin"],
                    imported_global_skill_id=compact["imported_global_skill_id"])
@@ -138,7 +140,9 @@ class ProvenanceTracker:
             }, source)
             self._emit(source, "transferred_from", receiver, _artifact(gid), worker_id=row["target_agent"],
                        source_agent=row["source_agent"], target_agent=row["target_agent"],
-                       source_local_id=row["source_local_id"], target_local_id=row["target_local_id"])
+                       source_local_id=row["source_local_id"], target_local_id=row["target_local_id"],
+                       **({"payload_scope": row["payload_scope"], "omitted_resources": row["omitted_resources"]}
+                          if row.get("omitted_resources") else {}))
 
     def _project_registration(self, source):
         row = source[3]
@@ -148,6 +152,7 @@ class ProvenanceTracker:
         child_reference, _ = self._observe(artifact.owner_agent, {
             "local_skill_id": artifact.local_skill_key, "content_hash": artifact.content_hash,
             "origin": artifact.origin, "imported_global_skill_id": artifact.imported_from_global_id,
+            "resource_files": artifact.resource_files,
         }, source)
         provenance = row.get("provenance", {})
         parents = list(provenance.get("parent_skill_ids", []))
@@ -281,7 +286,7 @@ class ProvenanceTracker:
             if (after.get("local_skill_key") != local_id
                     or (before is not None and before.get("local_skill_key") != local_id)):
                 raise ProvenanceIntegrityError("native evolution snapshot local ID mismatch")
-            if before is not None and before["content_hash"] == after["content_hash"]:
+            if before is not None and skill_version_key(before) == skill_version_key(after):
                 continue
             child, child_gid = self._observe(worker, after, source, task_id)
             self._emit(source, "native_update_observed", child, {"kind": "evolution"}, worker_id=worker,

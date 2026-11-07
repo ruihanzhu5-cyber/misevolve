@@ -131,6 +131,16 @@ def scenario(tmp_path, episode, monkeypatch, runner_factory, method_factory, syn
                     return llm_maintain(system=system, **kw)
 
                 monkeypatch.setattr(method.sdk.maintainer._llm, "complete", separate_capability)
+
+                snapshot_store = method._exchange.snapshot_store
+
+                def legacy_snapshot():
+                    bundles = snapshot_store()
+                    if any(bundle.get("resource_files") for bundle in bundles.values()):
+                        raise UnsupportedSkillError("unsupported resource file in native store: synthetic")
+                    return bundles
+
+                monkeypatch.setattr(method._exchange, "snapshot_store", legacy_snapshot)
             if faults["empty"]:
                 monkeypatch.setattr(method.sdk.extractor._llm, "complete", lambda **kw: '{"skills":[]}')
             if faults["ingest"]:
@@ -400,7 +410,7 @@ def test_continue_without_replaying_committed_work(episode, scenario, stop_at, c
     assert (metadata["retained_tasks"], metadata["retained_batches"]) == (stop_at - 1, committed_batches)
     if resource_stop:
         assert checkpoint.interrupted is None and len(checkpoint.pending_evolution) == 3
-        assert metadata["unsupported_resource_recovery"]
+        assert metadata["native_ingest_recovery"]
     else:
         assert checkpoint.interrupted["execution_index"] == stop_at
     stage7_pilot._copy_checkpoint(source, continuation, checkpoint)
@@ -420,12 +430,19 @@ def test_continue_without_replaying_committed_work(episode, scenario, stop_at, c
     assert [(event["worker_id"], event["target_worker_id"]) for event in events
             if event["event"] == "block_transfer"] == ROUTE
     if resource_stop:
-        rejection, = read_jsonl(restarted.run_dir / "resource_rejections.jsonl")
-        assert rejection["local_skill_id"] == metadata["unsupported_resource_recovery"]["local_skill_id"]
-        assert list(source.rglob("synthetic.sh")) and not list(continuation.rglob("synthetic.sh"))
-        assert not any(row.get("orig_id") == rejection["local_skill_id"] for row in rows)
         native = read_jsonl(restarted.run_dir / "workers/A/evolution_events.jsonl")
-        assert native[:3] == checkpoint.pending_evolution and len(native) == 9
+        assert native[:3] == checkpoint.pending_evolution and len(native) == 10
+        recovery = native[3]
+        assert recovery["success"] and recovery["recovered_from_event_id"] == native[2]["event_id"]
+        local_id = metadata["native_ingest_recovery"]["local_skill_id"]
+        resources = recovery["after"][local_id]["resource_files"]
+        assert set(resources) == {"scripts/synthetic.sh"}
+        assert list(source.rglob("synthetic.sh")) and list(continuation.rglob("synthetic.sh"))
+        assert any(row.get("orig_id") == local_id for row in rows)
+        transfers = read_jsonl(restarted.run_dir / "transfer_manifest.jsonl")
+        transfer = next(row for row in transfers if row["source_agent"] == "A")
+        sent = next(item for item in transfer["selection"] if item["source_local_id"] == local_id)
+        assert sent["files"] == ["SKILL.md"] and sent["omitted_resources"] == resources
     else:
         first = next(row for row in rows if row.get("execution_index") == stop_at)
         assert first["task_run_id"] != checkpoint.interrupted["task_run_id"]

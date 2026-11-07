@@ -7,44 +7,66 @@ import re
 import tempfile
 import uuid
 from dataclasses import asdict
+from hashlib import file_digest, sha256
 from pathlib import Path
 
 from ._io import append_jsonl, atomic_json, canonical_json, read_jsonl
-from .models import MAX_SKILL_BYTES, SkillOrigin, UnsupportedSkillError, content_hash, text_skill_files, valid_evidence
+from .models import MAX_SKILL_BYTES, SkillOrigin, content_hash, skill_version_key, text_skill_files, valid_evidence
 
 
 def skill_reference(bundle: dict) -> dict:
     """A content-free reference to the version observed at a particular boundary."""
-    return {
+    ref = {
         "local_skill_id": bundle.get("local_skill_key", bundle.get("local_skill_id")),
         "content_hash": bundle.get("content_hash"), "origin": bundle.get("origin", "unknown"),
         "imported_global_skill_id": bundle.get("imported_from_global_id", bundle.get("imported_global_skill_id")),
     }
+    if bundle.get("resource_files"):
+        ref["resource_files"] = bundle["resource_files"]
+    return ref
+
+
+def _resource_hashes(sdk, skill, exported):
+    from autoskill.management.formats.agent_skill import load_agent_skill_dir
+
+    resources = {name: sha256(text.encode("utf-8")).hexdigest()
+                 for name, text in exported.items() if name != "SKILL.md"}
+    store_path = getattr(sdk.store, "path", None)
+    if not store_path:
+        return resources
+    # The pinned SDK reloads user Skills without their file payloads. Use the
+    # public directory format to associate disk resources with the native ID.
+    user_root = Path(store_path) / "Users" / skill.user_id
+    for markdown in user_root.glob("*/SKILL.md"):
+        root = markdown.parent
+        files = [path for path in root.rglob("*") if path != markdown and path.is_file()]
+        if not files or load_agent_skill_dir(str(root), user_id=skill.user_id, include_files=False).id != skill.id:
+            continue
+        for path in files:
+            if path.is_symlink():
+                raise ValueError("symbolic links are unsupported in native Skill resources")
+            with path.open("rb") as handle:
+                resources[path.relative_to(root).as_posix()] = file_digest(handle, "sha256").hexdigest()
+        break
+    return resources
 
 
 def export_bundle(sdk, local_skill_key: str) -> dict:
     skill = sdk.get(local_skill_key)
     if skill is None:
         raise KeyError(local_skill_key)
-    # Native directory loading can silently omit binary resources. Inspect the public
-    # store root as well, without touching its records or indexes.
-    store_path = getattr(sdk.store, "path", None)
-    if store_path:
-        user_root = Path(store_path) / "Users" / skill.user_id
-        if user_root.exists():
-            for root in user_root.iterdir():
-                if root.is_dir():
-                    for path in root.rglob("*"):
-                        if path.is_file() and path.relative_to(root).as_posix() != "SKILL.md":
-                            raise UnsupportedSkillError(f"unsupported resource file in native store: {path}")
-    files = sdk.export_skill_dir(local_skill_key)
-    return {
+    files = text_skill_files({"SKILL.md": sdk.export_skill_md(local_skill_key)})
+    bundle = {
         "local_skill_key": local_skill_key,
         "version": str(skill.version),
-        "skill_files": text_skill_files(files),
+        "skill_files": files,
         "native_metadata": json.loads(canonical_json(asdict(skill))),
         "content_hash": content_hash(files),
     }
+    resources = _resource_hashes(sdk, skill, sdk.export_skill_dir(local_skill_key) or {})
+    if resources:
+        bundle["resource_files"] = resources
+    return bundle
 
 
 def imported_files(source_files: dict[str, str], local_id: str) -> dict[str, str]:
@@ -82,6 +104,7 @@ class AutoSkillExchange:
                         "origin": bundle["origin"],
                         "imported_from_global_id": bundle.get("imported_from_global_id"),
                         "content_hash": bundle["content_hash"],
+                        **({"resource_files": bundle["resource_files"]} if bundle.get("resource_files") else {}),
                     }
 
     def save(self) -> None:
@@ -115,13 +138,13 @@ class AutoSkillExchange:
         return event
 
     def _skill_references(self, skills) -> list[dict]:
-        return [
-            skill_reference({
-                **self.origins.get(skill.key, {}),
-                "local_skill_key": skill.key, "content_hash": content_hash({"SKILL.md": skill.text}),
-            })
-            for skill in skills
-        ]
+        refs = []
+        for skill in skills:
+            bundle = self.snapshot(skill.key)
+            if bundle["content_hash"] != content_hash({"SKILL.md": skill.text}):
+                raise ValueError("executor Skill text differs from the native snapshot")
+            refs.append(skill_reference(bundle))
+        return refs
 
     def record_retrieval(self, task: dict, skills, *, status: str) -> None:
         self._task_event("task_retrieval", task, retrieval_status=status, retrieved=self._skill_references(skills))
@@ -201,16 +224,7 @@ class AutoSkillExchange:
         finally:
             try:
                 after = self.snapshot_store()
-                for local_id, bundle in after.items():
-                    previous = before.get(local_id)
-                    if previous is None or previous["content_hash"] != bundle["content_hash"]:
-                        origin = SkillOrigin.LOCALLY_CREATED if previous is None else SkillOrigin.LOCALLY_UPDATED
-                        old_origin = self.origins.get(local_id, {})
-                        self.origins[local_id] = {
-                            "origin": origin, "imported_from_global_id": old_origin.get("imported_from_global_id"),
-                            "content_hash": bundle["content_hash"],
-                        }
-                        bundle.update(self.origins[local_id])
+                self._observe_changes(before, after)
                 event["after"] = after
             except Exception as exc:
                 event["success"] = False
@@ -220,6 +234,19 @@ class AutoSkillExchange:
                 append_jsonl(self.evolution_path, event)
                 self.events.append(event)
                 self.save()
+
+    def _observe_changes(self, before, after):
+        for local_id, bundle in after.items():
+            previous = before.get(local_id)
+            if previous is None or skill_version_key(previous) != skill_version_key(bundle):
+                origin = SkillOrigin.LOCALLY_CREATED if previous is None else SkillOrigin.LOCALLY_UPDATED
+                old_origin = self.origins.get(local_id, {})
+                self.origins[local_id] = {
+                    "origin": origin, "imported_from_global_id": old_origin.get("imported_from_global_id"),
+                    "content_hash": bundle["content_hash"],
+                    **({"resource_files": bundle["resource_files"]} if bundle.get("resource_files") else {}),
+                }
+                bundle.update(self.origins[local_id])
 
     def _verify_visibility(self, local_id: str) -> dict:
         skill = self.sdk.get(local_id)
@@ -295,8 +322,11 @@ class AutoSkillExchange:
                 local_id = expected_id
             else:
                 raise ValueError("native importer returned more than one skill for one artifact")
+            imported_bundle = export_bundle(self.sdk, local_id)
+            if imported_bundle.get("resource_files"):
+                raise ValueError("native import produced files outside the SKILL.md payload")
             record["local_id"] = local_id
-            record["imported_files"] = export_bundle(self.sdk, local_id)["skill_files"]
+            record["imported_files"] = imported_bundle["skill_files"]
             self.origins[local_id] = {
                 "origin": SkillOrigin.IMPORTED, "imported_from_global_id": global_id,
                 "content_hash": content_hash(record["imported_files"]),
@@ -308,15 +338,16 @@ class AutoSkillExchange:
         if record["imported_files"] != expected:
             raise ValueError("receiver import differs beyond allowed ID/line-ending adaptation")
         current = self.snapshot(local_id)
-        if current["skill_files"] != expected:
+        updated = current["skill_files"] != expected or bool(current.get("resource_files"))
+        if updated:
             origin = self.origins.get(local_id, {})
             if (origin.get("origin") != SkillOrigin.LOCALLY_UPDATED
-                    or origin.get("content_hash") != current["content_hash"]):
+                    or skill_version_key(origin) != skill_version_key(current)):
                 raise ValueError("receiver contents changed without a recorded local evolution")
         record.update({
             "integrity_verified": True, "target_content_hash": content_hash(expected),
             "current_content_hash": current["content_hash"],
-            "receiver_locally_updated": current["skill_files"] != expected,
+            "receiver_locally_updated": updated,
             "native_retrieval_verified": False,
         })
         self.save()

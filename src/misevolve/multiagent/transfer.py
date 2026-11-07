@@ -26,6 +26,8 @@ class SkillTransferManager:
             "source_local_id": artifact.local_skill_key, "target_local_id": None,
             "source_version": artifact.version, "target_content_hash": None,
             "content_hash": artifact.content_hash, "success": False,
+            "omitted_resources": artifact.resource_files,
+            "payload_scope": "SKILL.md_only",
             "integrity_verified": False, "native_retrieval_verified": False,
             "relationship": "transferred_from", "error": None,
         }
@@ -73,6 +75,7 @@ class SkillTransferManager:
             "selection": [{
                 "global_skill_id": a.global_skill_id, "source_local_id": a.local_skill_key,
                 "version": a.version, "content_hash": a.content_hash, "files": sorted(a.skill_files),
+                "omitted_resources": a.resource_files,
                 "native_revision_parent_id": a.native_revision_parent_id,
             } for a in artifacts],
         })

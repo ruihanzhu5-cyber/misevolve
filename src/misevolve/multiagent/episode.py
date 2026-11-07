@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from dataclasses import dataclass
 from hashlib import sha256
@@ -16,7 +17,7 @@ from ._episode_checkpoint import load_checkpoint
 from ._io import append_jsonl, atomic_json, canonical_json, read_jsonl
 from .episode_metrics import summarize_episode
 from .exchange import skill_reference
-from .models import SkillArtifact, WorkerRuntime
+from .models import SkillArtifact, WorkerRuntime, content_hash, skill_version_key
 from .orchestrator import MultiAgentOrchestrator
 from .provenance import ProvenanceTracker
 from .registry import GlobalSkillRegistry
@@ -130,44 +131,37 @@ def _restore_trace(worker, task, row):
     return trajectory, TaskOutcome(row["attack_success"], row["task_success"])
 
 
-def _discard_unsupported_addition(worker, rejected, journal):
-    from autoskill.management.formats.agent_skill import load_agent_skill_dir
-
+def _recover_native_ingest(worker, failed):
+    """Complete observation of a native write already committed in the original Store."""
     exchange = worker.method._exchange
-    sdk = worker.method.sdk
-    candidate, = rejected["returned_skills"]
+    candidate, = failed["returned_skills"]
     local_id = candidate["id"]
     resources = {path: data for path, data in candidate["files"].items() if path != "SKILL.md"}
-    user_root = Path(sdk.store.path) / "Users" / exchange.user_id
-    matches = []
-    for markdown in user_root.glob("*/SKILL.md"):
-        skill = load_agent_skill_dir(str(markdown.parent), user_id=exchange.user_id, include_files=False)
-        if skill.id == local_id:
-            matches.append(markdown.parent)
-    live_ids = {skill.id for skill in sdk.list(user_id=exchange.user_id)}
-    if len(matches) != 1 or live_ids != set(rejected["before"]) | {local_id}:
-        raise ValueError("copied native Store does not match the rejected resource addition")
-    root, = matches
-    files = {path.relative_to(root).as_posix(): path for path in root.rglob("*") if path.is_file()}
-    if set(files) != set(candidate["files"]) or any(
-        files[name].read_text(encoding="utf-8") != data.replace("\r\n", "\n").replace("\r", "\n")
-        for name, data in resources.items()
+    before = failed["before"]
+    after = exchange.snapshot_store()
+    if set(after) != set(before) | {local_id} or any(
+        skill_version_key(after[key]) != skill_version_key(bundle) or after[key]["version"] != bundle["version"]
+        for key, bundle in before.items()
     ):
-        raise ValueError("copied unsupported resources differ from the native ingest result")
-
-    def content(snapshots):
-        return {key: {field: value for field, value in bundle.items() if field != "native_metadata"}
-                for key, bundle in snapshots.items()}
-
-    if (not sdk.delete(local_id) or sdk.get(local_id) is not None
-            or content(exchange.snapshot_store()) != content(rejected["before"])):
-        raise ValueError("could not isolate the unsupported addition from the supported native versions")
-    append_jsonl(journal, {
-        "event": "unsupported_resource_rejected", "reason": "pilot_supports_only_SKILL.md",
-        "worker_id": worker.worker_id, "task_run_id": rejected["task"]["task_run_id"],
-        "local_skill_id": local_id, "source_ingest_event_id": rejected["event_id"],
-        "resource_count": len(resources), "resource_suffixes": sorted({Path(name).suffix for name in resources}),
-    })
+        raise ValueError("copied native Store does not match the committed ingest")
+    live = after[local_id]
+    hashes = live.get("resource_files", {})
+    if (live["version"] != str(candidate["version"])
+            or live["content_hash"] != content_hash({"SKILL.md": candidate["files"]["SKILL.md"]})
+            or set(hashes) != set(resources)
+            or any(hashes[name] not in {sha256(data.encode()).hexdigest(),
+                                       sha256(data.replace("\n", os.linesep).encode()).hexdigest()}
+                   for name, data in resources.items())):
+        raise ValueError("copied Skill body or resources differ from the saved native ingest result")
+    live["native_metadata"] = candidate
+    after = {**before, local_id: live}
+    exchange._observe_changes(before, after)
+    recovered = {**failed, "event_id": uuid.uuid4().hex, "success": True, "after": after,
+                 "recovered_from_event_id": failed["event_id"]}
+    recovered.pop("snapshot_error")
+    append_jsonl(exchange.evolution_path, recovered)
+    exchange.save()
+    return recovered
 
 
 def _task_row(
@@ -255,6 +249,7 @@ def _artifact_row(
         "authored_source": batch.tasks[0]["kind"], "block_id": batch.block_id,
         "global_skill_id": artifact.global_skill_id, "content_hash": artifact.content_hash,
         "version": artifact.version, "source_task_ids": artifact.source_task_ids, "content_judge_error_type": error,
+        "resource_files": artifact.resource_files,
         "native_revision_parent_id": artifact.native_revision_parent_id,
         "origin": artifact.origin, "imported_from_global_id": artifact.imported_from_global_id,
     }
@@ -408,8 +403,7 @@ def run_episode(
 
             mark("native_evolution", worker_id=batch.worker_id, block_id=batch.block_id, task_run_ids=task_run_ids)
             if pending_evolution:
-                _discard_unsupported_addition(worker, pending_evolution[-1], run_dir / "resource_rejections.jsonl")
-                events = pending_evolution
+                events = [*pending_evolution, _recover_native_ingest(worker, pending_evolution[-1])]
             else:
                 append_jsonl(checkpoint_path, {
                     "event": "evolution_started", "worker_id": batch.worker_id, "block_id": batch.block_id,

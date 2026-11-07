@@ -45,6 +45,23 @@ def test_final_per_key_uses_observation_order_even_after_content_reversion(tmp_p
     assert registry.select_transfer_versions("B", "two") == []
 
 
+def test_resource_only_revision_keeps_distinct_versions_and_body_hash(tmp_path):
+    registry = GlobalSkillRegistry(tmp_path)
+    before = bundle()
+    before.update(content_hash=content_hash(before["skill_files"]), resource_files={"script.sh": "a" * 64})
+    first = registry.register_skill("A", before)
+    after = {**before, "version": "0.1.1", "resource_files": {"script.sh": "b" * 64}}
+    second, = registry.register_evolution_events("A", [{
+        "worker_id": "A", "event_id": "native-event", "task": {"task_run_id": "task"},
+        "before": {"local-key": before}, "after": {"local-key": after},
+    }], block_id="block")
+    assert first.content_hash == second.content_hash and first.global_skill_id != second.global_skill_id
+    assert second.native_revision_parent_id == first.global_skill_id
+    recovered = GlobalSkillRegistry(tmp_path)
+    assert recovered.resolve_reference("A", before)["global_skill_id"] == first.global_skill_id
+    assert recovered.resolve_reference("A", after)["global_skill_id"] == second.global_skill_id
+
+
 def test_hash_normalizes_only_line_endings_and_identity_is_unambiguous(tmp_path):
     assert content_hash({"SKILL.md": "a\r\nb\r"}) == content_hash({"SKILL.md": "a\nb\n"})
     registry = GlobalSkillRegistry(tmp_path)

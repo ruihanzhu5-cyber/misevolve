@@ -51,8 +51,15 @@ def content_hash(files: dict[str, str]) -> str:
     return hashlib.sha256(canonical_json(text_skill_files(files)).encode("utf-8")).hexdigest()
 
 
-def global_skill_id(owner: str, local_key: str, digest: str) -> str:
-    return hashlib.sha256(canonical_json([owner, local_key, digest]).encode("utf-8")).hexdigest()
+def skill_version_key(bundle: dict) -> tuple:
+    return bundle["content_hash"], bundle.get("resource_files", {})
+
+
+def global_skill_id(owner: str, local_key: str, digest: str, resources: dict | None = None) -> str:
+    identity = [owner, local_key, digest]
+    if resources:
+        identity.append(resources)
+    return hashlib.sha256(canonical_json(identity).encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -64,6 +71,7 @@ class SkillArtifact:
     content_hash: str
     skill_files: dict[str, str]
     native_metadata: dict[str, Any] = field(default_factory=dict)
+    resource_files: dict[str, str] = field(default_factory=dict)
     parent_skill_ids: list[str] = field(default_factory=list)
     retrieved_parent_ids: list[str] = field(default_factory=list)
     invoked_parent_ids: list[str] = field(default_factory=list)

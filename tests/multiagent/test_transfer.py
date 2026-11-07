@@ -133,7 +133,7 @@ def test_search_failure_is_visible_and_retry_does_not_duplicate(tmp_path, worker
     assert sdk.get(local_id) is not None
 
 
-def test_resources_are_explicitly_rejected_on_export_import_and_disk(tmp_path, workers, seed_skill):
+def test_native_resources_are_kept_and_recorded_on_markdown_transfer(tmp_path, workers, seed_skill):
     worker = workers["A"]
     skill = seed_skill(worker)
     files = worker.method.export_skill_bundle(skill.id)["skill_files"]
@@ -142,13 +142,21 @@ def test_resources_are_explicitly_rejected_on_export_import_and_disk(tmp_path, w
         workers["B"].method.import_external_skill(extra, "a" * 64)
     assert workers["B"].method.sdk.list(user_id="skillmisevo") == []
     skill.files["references/extra.md"] = "synthetic"
-    with pytest.raises(UnsupportedSkillError):
-        worker.method.export_skill_bundle(skill.id)
+    assert set(worker.method.export_skill_bundle(skill.id)["resource_files"]) == {"references/extra.md"}
     del skill.files["references/extra.md"]
     md = next((worker.episode_dir / "autoskill_store" / "Users").rglob("SKILL.md"))
     (md.parent / "extra.bin").write_bytes(b"\x00\x01")
-    with pytest.raises(UnsupportedSkillError, match="resource file"):
-        worker.method.export_skill_bundle(skill.id)
+    bundle = worker.method.export_skill_bundle(skill.id)
+    assert set(bundle["resource_files"]) == {"extra.bin"} and bundle["skill_files"] == files
+    registry = GlobalSkillRegistry(tmp_path / "registry")
+    artifact = registry.register_skill("A", bundle, block_id="a")
+    manager = SkillTransferManager(registry, workers)
+    first, = manager.transfer_block("A", "B", block_id="a")
+    assert manager.transfer(artifact.global_skill_id, "A", "B") == first
+    assert worker.method.sdk.get(skill.id) is not None and (md.parent / "extra.bin").read_bytes() == b"\x00\x01"
+    assert "resource_files" not in workers["B"].method.export_skill_bundle(first)
+    event = registry.get_transfer_history()[-1]
+    assert registry.verified_transfer(event) and event["omitted_resources"] == bundle["resource_files"]
 
 
 def test_tampering_is_rejected_without_overwriting_receiver(tmp_path, workers, seed_skill):

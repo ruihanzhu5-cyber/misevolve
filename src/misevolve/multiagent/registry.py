@@ -10,7 +10,7 @@ from pathlib import Path
 
 from ._io import append_jsonl, canonical_json, read_jsonl
 from .exchange import imported_files, skill_reference
-from .models import SkillArtifact, content_hash, global_skill_id, text_skill_files, valid_evidence
+from .models import SkillArtifact, content_hash, global_skill_id, skill_version_key, text_skill_files, valid_evidence
 
 
 class GlobalSkillRegistry:
@@ -57,8 +57,9 @@ class GlobalSkillRegistry:
             raise ValueError(f"artifact manifest mismatch: {gid}")
         artifact = SkillArtifact(**data)
         digest = content_hash(files)
+        expected_gid = global_skill_id(artifact.owner_agent, artifact.local_skill_key, digest, artifact.resource_files)
         if (artifact.content_hash != digest or artifact.global_skill_id != gid
-                or global_skill_id(artifact.owner_agent, artifact.local_skill_key, digest) != gid):
+                or expected_gid != gid):
             raise ValueError(f"artifact hash/identity mismatch: {gid}")
         return artifact
 
@@ -86,11 +87,13 @@ class GlobalSkillRegistry:
             if revision_parent not in self._artifacts or not valid_evidence(item, "native_revision"):
                 raise ValueError("native revision requires a registered predecessor and evidence")
         digest = content_hash(files)
-        gid = global_skill_id(owner_agent, local_key, digest)
+        resources = copy.deepcopy(skill_bundle.get("resource_files", {}))
+        gid = global_skill_id(owner_agent, local_key, digest, resources)
         artifact = SkillArtifact(
             global_skill_id=gid, owner_agent=owner_agent, local_skill_key=local_key,
             version=str(skill_bundle.get("version", "unknown")), content_hash=digest, skill_files=files,
             native_metadata=copy.deepcopy(skill_bundle.get("native_metadata", {})),
+            resource_files=resources,
             parent_skill_ids=parents, parent_evidence=evidence,
             retrieved_parent_ids=list(provenance.get("retrieved_parent_ids", [])),
             invoked_parent_ids=list(provenance.get("invoked_parent_ids", [])),
@@ -147,7 +150,7 @@ class GlobalSkillRegistry:
                 if (bundle.get("local_skill_key") != local_id
                         or (before is not None and before.get("local_skill_key") != local_id)):
                     raise ValueError("native evolution snapshot local ID mismatch")
-                if before is not None and before["content_hash"] == bundle["content_hash"]:
+                if before is not None and skill_version_key(before) == skill_version_key(bundle):
                     continue
                 task = event["task"]
                 task_id = (task.get("task_run_id") or task.get("task_id")
@@ -193,6 +196,7 @@ class GlobalSkillRegistry:
         return (artifact.owner_agent == event.get("source_agent")
                 and artifact.local_skill_key == event.get("source_local_id")
                 and artifact.content_hash == event.get("content_hash")
+                and artifact.resource_files == event.get("omitted_resources", {})
                 and event.get("target_agent") != event.get("source_agent"))
 
     def resolve_reference(self, worker_id: str, snapshot: dict) -> dict:
@@ -206,6 +210,8 @@ class GlobalSkillRegistry:
             return result
 
         def resolve_import():
+            if ref.get("resource_files"):
+                return None
             for transfer in self.get_transfer_history():
                 if (transfer.get("target_agent") != worker_id or transfer.get("target_local_id") != local_id
                         or not self.verified_transfer(transfer)):
@@ -220,7 +226,7 @@ class GlobalSkillRegistry:
 
         if ref["origin"] == "imported":
             return resolve_import() or result
-        candidate = global_skill_id(worker_id, local_id, digest)
+        candidate = global_skill_id(worker_id, local_id, digest, ref.get("resource_files"))
         if candidate in self._artifacts:
             self.get_skill(candidate)
             return {**result, "global_skill_id": candidate, "resolution": "exact_registered"}

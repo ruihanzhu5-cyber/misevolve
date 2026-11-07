@@ -17,7 +17,7 @@ class EpisodeCheckpoint:
     pending_evolution: list[dict] | None
 
 
-def _unsupported_addition(directory, batch, task_rows):
+def _committed_resource_ingest(directory, batch, task_rows):
     events = read_jsonl(directory / "workers" / batch.worker_id / "evolution_events.jsonl")
     ids = [row["task_run_id"] for row in task_rows if row["runner_success"]]
     pending = [event for event in events if event["task"]["task_run_id"] in ids]
@@ -133,7 +133,7 @@ def load_checkpoint(directory: Path, plan: dict, batches) -> EpisodeCheckpoint:
                     artifact_ids.update(event["global_skill_ids"])
                 event = next(commits, None)
                 if name == "evolution_started" and event is None and resource_stop and len(finished) == len(tasks):
-                    pending_evolution = _unsupported_addition(directory, batch, tasks[-len(batch_ids):])
+                    pending_evolution = _committed_resource_ingest(directory, batch, tasks[-len(batch_ids):])
                     native_ids.extend(item["event_id"] for item in pending_evolution)
                     break
             if pending_evolution:

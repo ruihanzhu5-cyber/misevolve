@@ -41,6 +41,8 @@ TRANSFER_RULE = {
     "export": "pinned_native_export_skill_dir",
     "import": "pinned_native_import_agent_skill_dirs",
     "files": ["SKILL.md"],
+    "executor_export": "pinned_native_export_skill_md",
+    "resources": "retain_in_native_store_record_omissions_from_markdown_payload",
     "allowed_adaptation": ["receiver_frontmatter_id", "normalized_line_endings"],
     "unchanged_imports_forwarded": False,
     "receiver_local_additions_and_updates_forwarded": True,
@@ -300,9 +302,10 @@ def _continuation(source, episode, manifest=None):
     previous = json.loads((source / "run_manifest.json").read_text(encoding="utf-8"))
     if previous["stage"] != "7.2" or previous["run_id"] != source.name:
         raise ValueError("source is not a Stage 7.2 pilot run")
+    checkpoint = load_checkpoint(source / "episode", *_plan(episode))
     if manifest:
         keys = ("runtime", "python", "dependencies", "preflight_sha256", "dataset_sha256", "plan",
-                "episode_environment", "transfer_rule", "routes", "judges")
+                "episode_environment", "routes", "judges")
         ignored = {"task_timeout_seconds", "gateway_task_timeout_seconds", "stop_conditions"}
         old = {key: value for key, value in previous["configuration"].items() if key not in ignored}
         new = {key: value for key, value in manifest["configuration"].items() if key not in ignored}
@@ -310,20 +313,24 @@ def _continuation(source, episode, manifest=None):
             canonical_json(previous[key]) != canonical_json(manifest[key]) for key in keys
         ):
             raise ValueError("source and continuation have different experiment settings")
-    checkpoint = load_checkpoint(source / "episode", *_plan(episode))
+        old_rule, new_rule = previous["transfer_rule"], manifest["transfer_rule"]
+        legacy_rule = {key: value for key, value in new_rule.items() if key not in {"executor_export", "resources"}}
+        if old_rule != new_rule and not (checkpoint.pending_evolution and old_rule == legacy_rule
+                                         and not read_jsonl(source / "episode/transfer_manifest.jsonl")):
+            raise ValueError("source and continuation have different transfer rules")
     for name in ("model_calls.jsonl", "judge_results.jsonl"):
         read_jsonl(source / name)
-    rejected = checkpoint.pending_evolution[-1] if checkpoint.pending_evolution else None
+    committed = checkpoint.pending_evolution[-1] if checkpoint.pending_evolution else None
     return checkpoint, {
         "source_directory": str(source), "source_run_id": previous["run_id"], "source_code_sha": previous["code_sha"],
         "source_task_timeout_seconds": previous["configuration"]["task_timeout_seconds"],
         "source_continuation": previous.get("continuation"),
         "retained_tasks": len(checkpoint.tasks), "retained_batches": checkpoint.completed_batches,
         "first_execution_index": len(checkpoint.tasks) + 1, "interrupted_attempt": checkpoint.interrupted,
-        "unsupported_resource_recovery": ({
-            "worker_id": rejected["worker_id"], "task_run_id": rejected["task"]["task_run_id"],
-            "local_skill_id": rejected["updated_local_skill_ids"][0], "event_id": rejected["event_id"],
-        } if rejected else None),
+        "native_ingest_recovery": ({
+            "worker_id": committed["worker_id"], "task_run_id": committed["task"]["task_run_id"],
+            "local_skill_id": committed["updated_local_skill_ids"][0], "event_id": committed["event_id"],
+        } if committed else None),
     }
 
 
@@ -421,7 +428,6 @@ def _pilot_summary(root, calls, started, *, error=None, continuation=None):
         "technical_acceptance": "passed" if technical else "incomplete", "issues": issues,
         "attempted_tasks": len(tasks), "elapsed_seconds": round(time.monotonic() - started, 3),
         "continuation": continuation,
-        "unsupported_resource_rejections": read_jsonl(episode / "resource_rejections.jsonl"),
         "completed_hops": completed_hops, "tasks": tasks, "api": attempts,
         "error_type": type(error).__name__ if error is not None else None,
     })
