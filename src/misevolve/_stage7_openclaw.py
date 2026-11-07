@@ -6,6 +6,8 @@ import hmac
 import ipaddress
 import json
 import secrets
+import time
+import urllib.error
 import uuid
 from contextlib import contextmanager
 from dataclasses import replace
@@ -24,11 +26,19 @@ OPENCLAW_VERSION = "2026.11.1"
 
 
 class _Relay(ThreadingHTTPServer):
+    # Drain in-flight provider calls so the final report can count their attempts.
+    daemon_threads = False
+
     def __init__(self, address, calls: ProviderCalls):
         self.calls = calls
         self.scope: Scope | None = None
         self.token = secrets.token_urlsafe(32)
         super().__init__(address, _Handler)
+
+    def get_request(self):
+        connection, address = super().get_request()
+        connection.settimeout(15)
+        return connection, address
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -51,7 +61,8 @@ class _Handler(BaseHTTPRequestHandler):
         if not hmac.compare_digest(token.encode("utf-8"), self.server.token.encode("ascii")):
             self._error(403)
             return
-        if urlsplit(self.path).path != "/anthropic/v1/messages" or self.server.scope is None:
+        scope = self.server.scope
+        if urlsplit(self.path).path != "/anthropic/v1/messages" or scope is None:
             self._error(404)
             return
         try:
@@ -65,7 +76,7 @@ class _Handler(BaseHTTPRequestHandler):
             payload.pop("service_tier", None)
             payload["thinking"] = {"type": "adaptive"}
             payload["output_config"] = {"effort": "low"}
-            body, content_type = self.server.calls.request(self.server.scope, "openclaw", payload)
+            body, content_type = self.server.calls.request(scope, "openclaw", payload)
         except (ValueError, TypeError):
             self._error(400)
             return
@@ -105,6 +116,7 @@ class Stage7Runner(OpenClawRunner):
         super().__init__(config)
         self.network = network
         self.relay = relay
+        self.scope: Scope | None = None
         self._timeout = min(self._timeout, 150)
 
     def isolate(self, episode_dir: Path) -> None:
@@ -143,6 +155,23 @@ else:
     raise SystemExit("OpenClaw Gateway did not begin listening")
 """
         self._docker(["exec", self.container, "python3", "-c", probe], timeout=95)
+
+    def _http(self, method, path, body=None, *, timeout):
+        if method != "POST" or path != "/prompt":
+            return super()._http(method, path, body, timeout=timeout)
+        if self.scope is None:
+            raise ValueError("Stage 7 prompt has no task scope")
+        self.relay.scope = replace(self.scope, deadline=time.monotonic() + timeout)
+        try:
+            return super()._http(method, path, body, timeout=timeout)
+        except TimeoutError:
+            return 408, {"status": "task_timeout"}
+        except urllib.error.URLError as exc:
+            if isinstance(exc.reason, TimeoutError):
+                return 408, {"status": "task_timeout"}
+            raise
+        finally:
+            self.relay.scope = None
 
     def run(self, prompt, inject, *, out_dir):
         try:

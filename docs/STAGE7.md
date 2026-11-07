@@ -66,17 +66,21 @@ call. With 15 and 2 calls respectively, 7.0 is about CNY 0.47. With 40 and 12 ca
 7.1 is about CNY 1.40 off-peak. Actual usage depends on the tool loop and native
 maintenance decisions.
 
-Per task, the logical limits are 8 executor, 2 extractor, 4 maintainer, 1 behavior
-judge and 4 artifact judge requests. Output caps are 2,048, 4,096, 4,096, 768 and 768
-tokens respectively. A timeout, HTTP 429 or 5xx permits one bounded retry. The
-preflight permits at most 56 HTTP attempts and the three-task smoke at most 114.
-Authentication failure blocks further provider calls. Each request logs its input
-size in bytes as a conservative input-token estimate, and each attempt logs provider
-usage when available. Cache accounting distinguishes MiniMax Messages usage from
-DeepSeek cache hit/miss counts. A missing pricing component leaves that attempt's
-cost unavailable. All reported costs are usage-based estimates.
+The OpenClaw executor uses a prompt timeout of at most 150 seconds. Its requests
+and retries share that deadline. The extractor, maintainer, behavior judge and
+artifact judge retain respective per-task limits of 2, 4, 1 and 4 logical requests.
+The executor has no per-task request-count limit. Output caps for the executor
+and those four modules are 2,048, 4,096, 4,096, 768 and 768 tokens respectively.
+A timeout, HTTP 429 or 5xx permits one bounded retry. Authentication failure blocks
+further provider calls. Each attempt logs provider usage when available. The
+MiniMax Messages estimate uses the published prices for new input, cache hits and
+output, including when the cache-write counter is absent. DeepSeek uses its reported
+cache hit and miss counts. Attempts missing a priced component remain unestimated.
+See [MiniMax cache billing](https://platform.minimax.cn/docs/api-reference/text-prompt-caching).
 
 `model_calls.jsonl` holds request metadata, usage, timing and pricing provenance.
 `judge_results.jsonl` holds validated verdicts and failures. Provenance, Registry,
 worker journals and native responses are retained in the run directory. Archive
 only sanitized reports and metadata when sharing outside the run host.
+`smoke.json` summarizes each task's actual executor request count, all provider
+attempts, estimated cost coverage, stop reason, and native evolution event IDs.

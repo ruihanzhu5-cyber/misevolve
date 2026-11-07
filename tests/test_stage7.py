@@ -1,6 +1,7 @@
 import io
 import json
 import runpy
+import time
 from urllib.error import HTTPError
 
 import pytest
@@ -67,6 +68,62 @@ def test_stream_usage_uses_cumulative_provider_values():
     assert usage["output_tokens"] == 8 and usage["cache_read_tokens"] == 5
     with pytest.raises(ProviderError, match="incomplete"):
         _usage(stream.split(b'data: {"type": "message_stop"}')[0], streaming=True, deepseek=False)
+
+
+def test_openclaw_has_no_request_count_cap_and_prices_streams_without_cache_write(tmp_path, monkeypatch):
+    monkeypatch.setenv("MINIMAX_API_KEY", "synthetic-key")
+    stream = (
+        b'data: {"type":"message_start","message":{"model":"MiniMax-M3.1-Flash",'
+        b'"usage":{"input_tokens":20,"cache_read_input_tokens":5}}}\n\n'
+        b'data: {"type":"message_delta","usage":{"output_tokens":8}}\n\n'
+        b'data: {"type":"message_stop"}\n\n'
+    )
+    requests = []
+
+    class Response(io.BytesIO):
+        status = 200
+        headers = {"Content-Type": "text/event-stream"}
+
+    class Opener:
+        def open(self, request, *, timeout):
+            requests.append((json.loads(request.data), timeout))
+            return Response(stream)
+
+    monkeypatch.setattr("misevolve._stage7_api.urllib.request.build_opener", lambda *args: Opener())
+    calls = ProviderCalls(tmp_path, deepseek_peak=False)
+    scope = Scope("task", "A", deadline=time.monotonic() + 20)
+    for _ in range(20):
+        calls.request(scope, "openclaw", {"model": MINIMAX_MODEL, "max_tokens": 9999})
+    assert len(requests) == 20
+    assert all(body["max_tokens"] == 2048 and 0 < timeout <= 20 for body, timeout in requests)
+    summary = calls.summary(task_id="task")
+    assert summary["openclaw_requests"] == summary["attempts_with_cost"] == 20
+    assert summary["cost_estimate_cny"] == pytest.approx(20 * 0.0000525)
+    assert calls.summary(task_id="another")["openclaw_requests"] == 0
+    assert all(row["cache_write_tokens"] is None for row in read_jsonl(calls.path))
+
+
+def test_executor_deadline_blocks_new_calls_and_retries(tmp_path, monkeypatch):
+    monkeypatch.setenv("MINIMAX_API_KEY", "synthetic-key")
+    now = [0.0]
+    monkeypatch.setattr("misevolve._stage7_api.time.monotonic", lambda: now[0])
+    requests = []
+
+    class Opener:
+        def open(self, request, *, timeout):
+            requests.append(timeout)
+            now[0] = 2.0
+            raise TimeoutError()
+
+    monkeypatch.setattr("misevolve._stage7_api.urllib.request.build_opener", lambda *args: Opener())
+    calls = ProviderCalls(tmp_path, deepseek_peak=False)
+    scope = Scope("task", "A", deadline=2.0)
+    for _ in range(2):
+        with pytest.raises(ProviderError, match="task deadline") as failure:
+            calls.request(scope, "openclaw", {"model": MINIMAX_MODEL})
+        assert failure.value.status == 408
+    assert requests == [2.0]
+    assert calls.summary(task_id="task")["openclaw_requests"] == 1
 
 
 @pytest.mark.parametrize(("module", "verdict"), [

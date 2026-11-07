@@ -9,7 +9,7 @@ import urllib.error
 import urllib.request
 import uuid
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock
@@ -26,7 +26,7 @@ PRICE_DATE = "2026-11-07"
 INPUT_BYTES = 256_000
 LIMITS = {
     # Per task and module. The pair gives logical calls and maximum output tokens per call.
-    "openclaw": (8, 2048),
+    "openclaw": (None, 2048),
     "extractor": (2, 4096),
     "maintainer": (4, 4096),
     "behavior_judge": (1, 768),
@@ -39,6 +39,7 @@ class Scope:
     task_id: str
     worker_id: str
     instance_id: str | None = None
+    deadline: float | None = field(default=None, compare=False)
 
 
 class ProviderError(RuntimeError):
@@ -101,7 +102,9 @@ def _estimate(usage: dict, *, deepseek: bool, peak: bool) -> float | None:
             return None
         multiplier = 2 if peak else 1
         return round((miss + 0.02 * read + 4 * out) * multiplier / 1_000_000, 9)
-    if write != 0:
+    # MiniMax prices new input, cache hits and output. A missing cache-write
+    # counter in its streaming response does not remove any of those fields.
+    if write not in (0, None):
         return None
     return round((inp + 0.1 * read + 4 * out) / 1_000_000, 9)
 
@@ -146,17 +149,21 @@ class ProviderCalls:
         with self._lock:
             if self._auth_failed:
                 raise ProviderError("a provider authentication failure blocked further calls")
-            if self._attempts[call_scope] >= max_calls:
-                raise ProviderError("Stage 7 module call limit reached")
-            self._attempts[call_scope] += 1
+            if max_calls is not None:
+                if self._attempts[call_scope] >= max_calls:
+                    raise ProviderError("Stage 7 module call limit reached")
+                self._attempts[call_scope] += 1
         for attempt in (1, 2):
             status = request_id = response_model = None
             error = None
             usage = {}
             elapsed = time.monotonic()
+            timeout = 45 if scope.deadline is None else min(45, scope.deadline - elapsed)
+            if timeout <= 0:
+                raise ProviderError("executor task deadline reached", 408)
             start = datetime.now(UTC).isoformat()
             try:
-                with opener.open(request, timeout=45) as response:
+                with opener.open(request, timeout=timeout) as response:
                     status = response.status
                     request_id = response.headers.get("request-id") or response.headers.get("x-request-id")
                     content_type = response.headers.get("Content-Type", "application/json")
@@ -201,18 +208,24 @@ class ProviderCalls:
             if error is None:
                 return content, content_type
             if attempt == 1 and (error == "timeout" or status == 429 or (status is not None and 500 <= status < 600)):
+                if scope.deadline is not None and scope.deadline - time.monotonic() <= 1:
+                    raise ProviderError("executor task deadline reached", 408)
                 time.sleep(1)
                 continue
             raise ProviderError(f"{provider} {error}", status)
         raise AssertionError("provider retry loop exceeded")
 
-    def summary(self) -> dict:
+    def summary(self, *, task_id: str | None = None) -> dict:
         attempts = read_jsonl(self.path)
+        if task_id is not None:
+            attempts = [row for row in attempts if row["task_id"] == task_id]
         costs = [row["cost"] for row in attempts if row["cost"] is not None]
+        counts = Counter(row["module"] for row in attempts)
         return {
             "provider_attempts": len(attempts),
             "successful_attempts": sum(row["status"] == "ok" for row in attempts),
-            "attempts_by_module": dict(Counter(row["module"] for row in attempts)),
+            "openclaw_requests": counts["openclaw"],
+            "attempts_by_module": dict(counts),
             "cost_estimate_cny": round(sum(costs), 9) if costs or not attempts else None,
             "attempts_with_cost": len(costs),
             "input_tokens_reported": sum(row["input_tokens"] or 0 for row in attempts),

@@ -123,8 +123,8 @@ def _openclaw_check(calls, run_dir):
         "After receiving its output, reply with only the output line."
     )
     with isolated_relay(calls) as (network, relay):
-        relay.scope = scope
         runner = Stage7Runner(network, relay)
+        runner.scope = scope
         runner.isolate(run_dir)
         trajectory = runner.run(prompt, [], out_dir=run_dir / "openclaw")
     raw = trajectory.raw
@@ -360,6 +360,7 @@ def smoke(calls, run_dir, preflight_path):
     artifacts = []
     started = time.monotonic()
     status = "incomplete"
+    initial_skill_count = None
     try:
         with isolated_relay(calls) as (network, relay):
             root = run_dir / "workers" / "A"
@@ -369,9 +370,12 @@ def smoke(calls, run_dir, preflight_path):
             registry = GlobalSkillRegistry(run_dir / "registry")
             tracker = ProvenanceTracker(run_dir, registry)
             try:
+                initial_skill_count = len(worker.method.sdk.list(user_id=worker.method._UID))
+                if initial_skill_count:
+                    raise ValueError("Stage 7.1 requires an empty Skill Store")
                 for index, task in enumerate(tasks):
                     scope = Scope(uuid.uuid4().hex, "A", task["instance_id"])
-                    relay.scope = scope
+                    runner.scope = scope
                     _trace_native(worker, calls, scope, root / "native_responses.jsonl")
                     _smoke_task(worker, tracker, registry, calls, scope, task, plan[index], rows, artifacts)
                 status = "passed" if _complete_smoke(rows, artifacts) else "partial"
@@ -379,8 +383,11 @@ def smoke(calls, run_dir, preflight_path):
                 worker.method.teardown()
                 runner.teardown()
     finally:
+        for row in rows:
+            row.update(calls.summary(task_id=row["task_run_id"]))
         atomic_json(run_dir / "smoke.json", {
             "stage": "7.1", "run_id": run_dir.name, "status": status, "tasks": rows, "artifacts": artifacts,
+            "initial_skill_count": initial_skill_count,
             "elapsed_seconds": round(time.monotonic() - started, 3), **calls.summary(),
         })
     return status == "passed"
@@ -389,7 +396,7 @@ def smoke(calls, run_dir, preflight_path):
 def _smoke_task(worker, tracker, registry, calls, scope, task, plan, rows, artifacts):
     method = worker.method
     row = {**plan, "task_run_id": scope.task_id, "behavior": None, "tool_round_trip": False,
-           "execution_ok": False, "error_type": None}
+           "execution_ok": False, "error_type": None, "stop_reason": "incomplete", "evolution_event_ids": []}
     rows.append(row)
     try:
         trace = method.run_task(
@@ -401,15 +408,17 @@ def _smoke_task(worker, tracker, registry, calls, scope, task, plan, rows, artif
         if event is None or event.get("runner_raised") is not True:
             raise
         row["error_type"] = type(exc).__name__
+        row["stop_reason"] = "runner_error"
         tracker.sync()
         return
     event = _task_execution(method._exchange.task_path, scope.task_id)
     if event is None:
         raise ValueError("task execution evidence missing")
     row["execution_ok"] = event["execution_status"] == "completed"
+    row["session_id"] = trace.raw.get("session_id")
     if row["execution_ok"]:
+        row["stop_reason"] = "completed"
         history = trace.raw.get("history") or []
-        row["session_id"] = trace.raw["session_id"]
         row["tool_round_trip"] = tool_round_trip(history)
         try:
             row["behavior"] = _judge(calls, scope, "behavior_judge", _behavior_prompt(task["prompt"], history),
@@ -419,6 +428,7 @@ def _smoke_task(worker, tracker, registry, calls, scope, task, plan, rows, artif
         verdict = row["behavior"] or {}
         method.evolve_batch([trace], [harness.TaskOutcome(verdict.get("harmful"), verdict.get("task_success"))],
                             kind="B", round_idx=task["round"])
+        row["evolution_event_ids"] = [event["event_id"] for event in method._last_evolution_events]
         for artifact in registry.register_evolution_events("A", method._last_evolution_events, block_id="7.1"):
             worker.remember_local_version(artifact.local_skill_key, artifact.global_skill_id)
             item = {
@@ -436,6 +446,9 @@ def _smoke_task(worker, tracker, registry, calls, scope, task, plan, rows, artif
                 item["judge_error_type"] = type(exc).__name__
     else:
         row["error_type"] = event["error_type"]
+        response = trace.raw.get("prompt_response")
+        timeout = isinstance(response, dict) and response.get("status") == "task_timeout"
+        row["stop_reason"] = "task_timeout" if timeout else "runner_error"
     tracker.sync()
     context = tracker.get_task_context(scope.task_id)
     row.update({key: context[key] for key in ("retrieved", "injected", "invoked", "invocation_status")})
