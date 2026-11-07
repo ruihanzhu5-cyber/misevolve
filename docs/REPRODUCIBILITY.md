@@ -97,3 +97,32 @@ git diff --check
 The test suite validates episode counts and order, configuration resolution, fixed missing
 outcomes, schedule balance, SafeEvolve admission and reuse behavior, frozen reload, and the
 Utility-only control.
+
+## Stages 2–4 engineering verification
+
+Native exchange tests require the exact AutoSkill checkout installed by
+`scripts/setup_methods.sh`: `94c47ca488d4ba4117d20272e66d49b9877e68cf`. They fail, rather than
+silently skip, if that dependency is missing or has a different Git HEAD. With that
+checkout available, install the local development dependencies and run:
+
+```bash
+uv venv --python 3.12
+uv pip install --python .venv/Scripts/python.exe -e '.[dev]' -e external/methods/AutoSkill
+.venv/Scripts/python.exe -m pytest -q tests/multiagent
+```
+
+The example uses the Windows virtual-environment path; on POSIX use `.venv/bin/python`.
+Tests block network connections and Docker, use synthetic text skills, and mock only
+LLM responses for native ingest tests. They exercise real local SDK search, import,
+maintenance, disk reload, idempotency, content adaptation, and failure recovery.
+
+Registry and worker directories currently support one writer each. JSONL corruption
+is reported explicitly; incomplete records are not silently truncated. `resume=True`
+restores native skill contents and exchange identity, not upstream in-memory maintainer
+state or conversations. Concurrent writers and full episode resume are unsupported.
+
+Keep source/receiver hashes and import, integrity, and diagnostic-search statuses separate.
+Diagnostic search can inspect the whole receiver library and does not establish ordinary
+top-k retrieval performance; a separate test exercises the adapter's normal top-k path.
+No real M task, container egress experiment, or model API call belongs to this engineering
+verification. A future Pilot still requires sandbox/network validation and fixed images.

@@ -84,6 +84,32 @@ class AutoSkill(harness.MethodHarness):
 
     _UID = "skillmisevo"
 
+    def __init__(self) -> None:
+        self._exchange = None
+
+    def enable_skill_exchange(self, worker_id: str) -> None:
+        """Opt in after setup; the single-agent lifecycle remains unchanged by default."""
+        from misevolve.multiagent.exchange import AutoSkillExchange
+
+        self._exchange = AutoSkillExchange(self.sdk, self._dir, user_id=self._UID, worker_id=worker_id)
+        self._retrieved_by_traj: dict[int, list[dict]] = {}
+        self._task_by_traj: dict[int, dict] = {}
+        self._last_evolution_events = []
+
+    def export_skill_bundle(self, local_skill_key: str) -> dict:
+        from misevolve.multiagent.exchange import export_bundle
+
+        if self._exchange is not None:
+            return self._exchange.snapshot(local_skill_key)
+        return export_bundle(self.sdk, local_skill_key)
+
+    def import_external_skill(self, skill_files, global_skill_id, *, source_agent="", source_local_id="") -> str:
+        if self._exchange is None:
+            raise RuntimeError("enable_skill_exchange must be called before importing")
+        return self._exchange.import_skill(
+            skill_files, global_skill_id, source_agent=source_agent, source_local_id=source_local_id,
+        )
+
     def setup(self, episode_dir: Path, agent: "harness.AgentRunner") -> None:
         self.agent = agent
         self._dir = Path(episode_dir)
@@ -134,8 +160,12 @@ class AutoSkill(harness.MethodHarness):
     def run_task(self, prompt: str, *, kind: str, pos: int, out_dir: Path) -> "harness.Trajectory":
         skills = self._retrieve(prompt)
         self._last_retrieved = skills
+        retrieved = [self._exchange.snapshot(s.key) for s in skills] if self._exchange is not None else []
         traj = self.agent.run(prompt, skills, out_dir=out_dir)
         self._prompt_by_traj[id(traj)] = prompt
+        if self._exchange is not None:
+            self._retrieved_by_traj[id(traj)] = retrieved
+            self._task_by_traj[id(traj)] = {"pos": pos, "kind": kind}
         return traj
 
     def _retrieve(self, query: str) -> "list[harness.Skill]":
@@ -162,13 +192,23 @@ class AutoSkill(harness.MethodHarness):
 
     def evolve_batch(self, traces, outcomes, *, kind: str, round_idx: int) -> None:
         self._last_kind, self._last_round = kind, round_idx
+        if self._exchange is not None:
+            self._exchange.events = []
+            self._last_evolution_events = self._exchange.events
         for traj in traces:
             prompt = self._prompt_by_traj.get(id(traj), "")
             messages, events = self._traj_to_session(traj, prompt)
             if not messages and not events:
                 continue
             try:
-                self.sdk.ingest(
+                ingest = self.sdk.ingest
+                if self._exchange is not None:
+                    def ingest(**kwargs):
+                        return self._exchange.ingest(
+                            task={**self._task_by_traj.get(id(traj), {}), "kind": kind, "round": round_idx},
+                            retrieved=self._retrieved_by_traj.get(id(traj), []), **kwargs,
+                        )
+                ingest(
                     user_id=self._UID,
                     messages=(messages or None),
                     events=(events or None),
@@ -181,6 +221,8 @@ class AutoSkill(harness.MethodHarness):
                     hint=self._hint,
                 )
             except Exception as e:
+                if self._exchange is not None:
+                    raise
                 print(f"[autoskill] ingest failed (kind={kind} r{round_idx}): {e}", flush=True)
 
         self._record_prov(kind, int(round_idx))
@@ -256,7 +298,9 @@ class AutoSkill(harness.MethodHarness):
         return out
 
     def teardown(self) -> None:
-        pass
+        client = getattr(self, "_areviser", None)
+        if client is not None:
+            client.close()
 
     def _wrap_anthropic_complete(self) -> None:
         """Replace the reviser LLM's ``complete`` on BOTH the extractor and maintainer

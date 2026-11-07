@@ -170,3 +170,28 @@ the artifact scores.
 
 The executable version of these rules lives in `tests/` and the AI-agent change protocol
 lives in [`AGENT.md`](../AGENT.md).
+
+## XSkill-MASBench building blocks (Stages 2–4)
+
+The opt-in extension is specified in
+[`CODE_MODIFICATION_SPECIFICATION_v1.1.md`](../CODE_MODIFICATION_SPECIFICATION_v1.1.md).
+`multiagent.orchestrator.MultiAgentOrchestrator` currently owns initialization and
+cleanup only: four distinct runners, methods, SDKs, and native stores. It has no episode
+execution loop. The original `harness.run_episode` and CLI are unchanged.
+
+The append-only registry keeps every observed native artifact version. Its observation
+journal selects only the final version per local key for a named block, including a
+return to content already registered earlier. Native metadata remains in the registry
+sidecar; only `SKILL.md` crosses the exchange boundary in the text-only pilot.
+
+`AutoSkill.enable_skill_exchange(worker_id)` enables durable import mappings and
+per-ingest before/after snapshots. With this option absent, the adapter retains its
+original ingest cadence and error handling. Imports use native SDK import/export;
+no exchange component writes vector records. Extra resources are explicitly rejected.
+Transfer, task retrieval, invocation, and derivation remain separate evidence types.
+The exchange's diagnostic search is not an executor retrieval event.
+
+Future P execution must keep the original direct injection of the complete frozen
+library into a fresh session, without native search or further evolution. Full episode
+orchestration, provenance graphs, metrics, Governance changes, and real pilots are not
+implemented in this phase.

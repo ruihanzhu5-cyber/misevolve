@@ -80,3 +80,25 @@ tag contains `clawkeeper` loads the ClawKeeper plugin.
 5. Route method-internal inference through the selected backbone.
 6. Add unit tests for native store discovery, retrieval, evolution, and reload.
 7. Add the method to `configs/grid.yaml` only after a smoke cell succeeds.
+
+## AutoSkill text-only exchange pilot
+
+Stages 2–4 add an optional bridge over the same pinned AutoSkill revision. Export uses
+`sdk.export_skill_dir`; import uses `sdk.import_agent_skill_dirs(overwrite=False,
+include_files=True, reassign_ids=True)`. Each temporary import root contains a child named
+with the global artifact ID. That relative directory name, not the random temporary
+parent, determines the native import identity. The native format parser is used read-only
+to recover the expected ID after an interrupted import; the SDK importer performs every write.
+
+Only one nonempty UTF-8 `SKILL.md` of at most 1,000,000 bytes is supported. Resources are
+rejected both in exported mappings and on disk, including binaries that upstream might
+otherwise omit. Native ID frontmatter adaptation and LF normalization are allowed;
+other content differences fail integrity verification. Source and receiver hashes are
+stored separately. Source SDK metadata is preserved in registry snapshots, not silently
+claimed to round-trip through the directory importer.
+
+Each native ingest return is recorded with immutable before/after snapshots and original
+retrieved versions. Imported origin is retained when a receiver updates that skill.
+Repeating its earlier transfer preserves the recorded local update. All observed versions
+can be registered, while block transfer selects the final version per local key.
+This recording does not assign derivation or invocation from retrieval alone.
