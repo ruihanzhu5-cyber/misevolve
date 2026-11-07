@@ -29,6 +29,7 @@ Each task uses a fresh session id, so cross-task carry is only via injected skil
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -182,7 +183,7 @@ class OpenClawRunner(harness.AgentRunner):
         self._rm_container()
         self._boot()
 
-        self._write_skills(inject, out_dir)
+        injection = self._write_skills(inject, out_dir)
 
         session_id = uuid.uuid4().hex
         err: str | None = None
@@ -206,6 +207,7 @@ class OpenClawRunner(harness.AgentRunner):
             err = f"openclaw run error: {e!r}"
 
         raw = self._history_to_raw(history, prompt_resp, session_id)
+        raw["_skill_injection"] = injection
         if err and not raw["final_text"]:
             raw["_container"] = {"error": err}
         else:
@@ -216,9 +218,9 @@ class OpenClawRunner(harness.AgentRunner):
         (out_dir / "trajectory_raw.json").write_text(json.dumps(raw, ensure_ascii=False, indent=2))
         return _normalize.normalize(raw)
 
-    def _write_skills(self, inject: "list[harness.Skill]", out_dir: Path) -> None:
+    def _write_skills(self, inject: "list[harness.Skill]", out_dir: Path) -> dict:
 
-        self._docker(
+        reset = self._docker(
             [
                 "exec",
                 self.container or "",
@@ -230,9 +232,10 @@ class OpenClawRunner(harness.AgentRunner):
             check=False,
         )
 
+        manifest = {"status": "success" if reset.returncode == 0 else "unknown", "skills": []}
         self._install_defense_skill(out_dir)
         if not inject:
-            return
+            return manifest
         stage = out_dir / "_skills_stage"
         if stage.exists():
             import shutil
@@ -255,6 +258,13 @@ class OpenClawRunner(harness.AgentRunner):
             (sk_dir / "SKILL.md").write_text(self._skill_md(entry), encoding="utf-8")
 
             self._docker(["cp", str(sk_dir), f"{self.container}:{_SKILL_ROOT}/{slug}"], timeout=60, check=True)
+            manifest["skills"].append({
+                "local_skill_id": sk.key,
+                "runtime_skill_name": name,
+                "runtime_directory_slug": slug,
+                "runtime_content_hash": hashlib.sha256((sk_dir / "SKILL.md").read_bytes()).hexdigest(),
+            })
+        return manifest
 
     def _install_defense_skill(self, out_dir: Path) -> None:
         """Install a third-party runtime defense skill using ITS OWN installer, unmodified.

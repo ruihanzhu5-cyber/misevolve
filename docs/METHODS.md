@@ -102,3 +102,14 @@ retrieved versions. Imported origin is retained when a receiver updates that ski
 Repeating its earlier transfer preserves the recorded local update. All observed versions
 can be registered, while block transfer selects the final version per local key.
 This recording does not assign derivation or invocation from retrieval alone.
+
+Stage 5 persists content-free task retrieval references before calling the runner, then
+records completion/failure separately. The opt-in task UUID is attached to native ingest
+metadata and its evidence event. OpenClaw adds `_skill_injection` to raw trajectory metadata;
+the manifest hashes the actual staged bytes and records each final runtime slug. It does
+not change the injected content, session lifecycle, or single-agent P execution path.
+
+`register_evolution_events` independently resolves retrieval snapshots and exact native
+predecessors. `native_revision_parent_id` is distinct from semantic `parent_skill_ids`.
+Unknown predecessors retain a local reference. Only explicit instrumentation populates
+invoked parents; explicit derivation requires a registered parent and typed evidence.

@@ -126,3 +126,29 @@ Diagnostic search can inspect the whole receiver library and does not establish 
 top-k retrieval performance; a separate test exercises the adapter's normal top-k path.
 No real M task, container egress experiment, or model API call belongs to this engineering
 verification. A future Pilot still requires sandbox/network validation and fixed images.
+
+## Stage 5 provenance verification
+
+Run the focused tests before the full suite:
+
+```bash
+.venv/Scripts/python.exe -m pytest -q tests/multiagent/test_provenance.py tests/multiagent/test_provenance_integration.py
+.venv/Scripts/python.exe -m pytest -q
+.venv/Scripts/ruff.exe check .
+.venv/Scripts/python.exe -m compileall -q src docker
+git diff --check
+```
+
+The multiagent fixture blocks socket connection methods, connection creation, DNS lookup,
+and the real Docker wrapper. Manifest tests replace Docker/HTTP with in-process fakes;
+native SDK extraction/maintenance tests supply synthetic LLM responses. They launch no
+container and consume no model budget. The Stage 5 scenario is A creates S1 → B imports and
+retrieves S1 → B natively revises it into S2 → C imports S2. It asserts no semantic derivation
+or invocation without separate evidence.
+
+Retain registry, transfer, worker task, and worker evolution journals together. Provenance
+is a rebuildable projection with deterministic IDs and append-only global resolutions.
+Source rewrites, ID/content conflicts, removed source records, and incomplete JSONL tails
+fail explicitly. A process interruption can leave a durable retrieval without completion;
+execution and injection then remain unknown. Do not replace unknown evidence with failure,
+success, invocation, or semantic derivation. See [PROVENANCE.md](PROVENANCE.md).

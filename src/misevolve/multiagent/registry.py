@@ -9,7 +9,8 @@ import re
 from pathlib import Path
 
 from ._io import append_jsonl, canonical_json, read_jsonl
-from .models import SkillArtifact, content_hash, global_skill_id, text_skill_files
+from .exchange import imported_files, skill_reference
+from .models import SkillArtifact, content_hash, global_skill_id, text_skill_files, valid_evidence
 
 
 class GlobalSkillRegistry:
@@ -74,10 +75,16 @@ class GlobalSkillRegistry:
         evidence = dict(provenance.get("parent_evidence", {}))
         for parent in parents:
             item = evidence.get(parent, {})
-            if parent not in self._artifacts or item.get("type") not in {"native_revision", "explicit_derivation"}:
+            if (parent not in self._artifacts
+                    or item.get("type") not in {"native_revision", "explicit_derivation"}):
                 raise ValueError("parent requires a registered artifact and independent derivation evidence")
-            if not item.get("source_ref"):
+            if not valid_evidence(item, item["type"]):
                 raise ValueError("parent evidence requires a source_ref")
+        revision_parent = provenance.get("native_revision_parent_id")
+        if revision_parent is not None:
+            item = evidence.get(revision_parent, {})
+            if revision_parent not in self._artifacts or not valid_evidence(item, "native_revision"):
+                raise ValueError("native revision requires a registered predecessor and evidence")
         digest = content_hash(files)
         gid = global_skill_id(owner_agent, local_key, digest)
         artifact = SkillArtifact(
@@ -92,6 +99,8 @@ class GlobalSkillRegistry:
             safety_status=provenance.get("safety_status", "unknown"),
             origin=skill_bundle.get("origin", "unknown"),
             imported_from_global_id=skill_bundle.get("imported_from_global_id"),
+            native_revision_parent_id=revision_parent,
+            unresolved_predecessor=copy.deepcopy(provenance.get("unresolved_predecessor")),
         )
         is_new = gid not in self._artifacts
         if is_new:
@@ -135,16 +144,92 @@ class GlobalSkillRegistry:
                 raise ValueError("evolution event owner mismatch")
             for local_id, bundle in event["after"].items():
                 before = event["before"].get(local_id)
+                if (bundle.get("local_skill_key") != local_id
+                        or (before is not None and before.get("local_skill_key") != local_id)):
+                    raise ValueError("native evolution snapshot local ID mismatch")
                 if before is not None and before["content_hash"] == bundle["content_hash"]:
                     continue
                 task = event["task"]
-                task_id = task.get("task_id") or f"{owner_agent}:{task.get('kind')}:{task.get('pos')}"
+                task_id = (task.get("task_run_id") or task.get("task_id")
+                           or f"{owner_agent}:{task.get('kind')}:{task.get('pos')}")
+                retrieved = [self.resolve_reference(owner_agent, ref)["global_skill_id"]
+                             for ref in event.get("retrieved", [])]
+                invoked = [self.resolve_reference(owner_agent, item["skill"])["global_skill_id"]
+                           for item in event.get("invocation_evidence", [])
+                           if valid_evidence(item.get("evidence", {}), "explicit_invocation")]
+                provenance = {
+                    "transformation_type": "native_update", "source_event_id": event["event_id"],
+                    "retrieved_parent_ids": list(dict.fromkeys(gid for gid in retrieved if gid)),
+                    "invoked_parent_ids": list(dict.fromkeys(gid for gid in invoked if gid)),
+                }
+                if before is not None:
+                    predecessor = self.resolve_reference(owner_agent, before)
+                    if predecessor["global_skill_id"]:
+                        parent = predecessor["global_skill_id"]
+                        provenance["native_revision_parent_id"] = parent
+                        provenance["parent_evidence"] = {
+                            parent: {"type": "native_revision", "source_ref": event["event_id"]},
+                        }
+                    else:
+                        provenance["unresolved_predecessor"] = skill_reference(before)
                 artifacts.append(self.register_skill(
-                    owner_agent, bundle, [task_id],
-                    {"transformation_type": "native_update", "source_event_id": event["event_id"]},
+                    owner_agent, bundle, [task_id], provenance,
                     block_id=block_id,
                 ))
         return artifacts
+
+    def verified_transfer(self, event: dict) -> bool:
+        if (event.get("event") != "skill_transfer"
+                or not all(event.get(key) is True for key in (
+                    "success", "integrity_verified", "native_retrieval_verified",
+                ))):
+            return False
+        gid = event.get("global_skill_id")
+        if (gid not in self._artifacts or not isinstance(event.get("target_local_id"), str)
+                or not event["target_local_id"] or not isinstance(event.get("target_agent"), str)
+                or not event["target_agent"]):
+            return False
+        artifact = self.get_skill(gid)
+        return (artifact.owner_agent == event.get("source_agent")
+                and artifact.local_skill_key == event.get("source_local_id")
+                and artifact.content_hash == event.get("content_hash")
+                and event.get("target_agent") != event.get("source_agent"))
+
+    def resolve_reference(self, worker_id: str, snapshot: dict) -> dict:
+        """Resolve the exact observed version; a current local/global map is insufficient."""
+        ref = skill_reference(snapshot)
+        result = {**ref, "global_skill_id": None, "resolution": "unknown"}
+        digest, local_id = ref["content_hash"], ref["local_skill_id"]
+        if "skill_files" in snapshot and content_hash(snapshot["skill_files"]) != digest:
+            raise ValueError("snapshot content hash mismatch")
+        if not digest or not local_id:
+            return result
+
+        def resolve_import():
+            for transfer in self.get_transfer_history():
+                if (transfer.get("target_agent") != worker_id or transfer.get("target_local_id") != local_id
+                        or not self.verified_transfer(transfer)):
+                    continue
+                gid = transfer["global_skill_id"]
+                if ref["imported_global_skill_id"] and gid != ref["imported_global_skill_id"]:
+                    continue
+                expected = imported_files(self.export_skill(gid), local_id)
+                if content_hash(expected) == digest:
+                    return {**result, "global_skill_id": gid, "resolution": "verified_import"}
+            return None
+
+        if ref["origin"] == "imported":
+            imported = resolve_import()
+            if imported:
+                return imported
+        candidate = global_skill_id(worker_id, local_id, digest)
+        if candidate in self._artifacts:
+            self.get_skill(candidate)
+            return {**result, "global_skill_id": candidate, "resolution": "exact_registered"}
+        return resolve_import() or result
+
+    def get_observations(self) -> list[dict]:
+        return copy.deepcopy(self._observations)
 
     def export_skill(self, gid: str) -> dict[str, str]:
         return self.get_skill(gid).skill_files

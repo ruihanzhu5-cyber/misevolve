@@ -26,6 +26,12 @@ class SkillOrigin(StrEnum):
     UNKNOWN = "unknown"
 
 
+def valid_evidence(evidence: dict, kind: str) -> bool:
+    ref = evidence.get("source_ref")
+    return (evidence.get("type") == kind and isinstance(ref, str) and bool(ref.strip())
+            and len(ref) <= 1024 and "\n" not in ref and "\r" not in ref)
+
+
 def text_skill_files(files: dict[str, str]) -> dict[str, str]:
     if not isinstance(files, dict) or set(files) != {"SKILL.md"}:
         raise UnsupportedSkillError("text-only pilot requires exactly SKILL.md; resource files are unsupported")
@@ -67,6 +73,8 @@ class SkillArtifact:
     safety_status: str = "unknown"
     origin: str = SkillOrigin.UNKNOWN
     imported_from_global_id: str | None = None
+    native_revision_parent_id: str | None = None
+    unresolved_predecessor: dict[str, Any] | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)

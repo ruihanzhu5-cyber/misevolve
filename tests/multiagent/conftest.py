@@ -32,6 +32,9 @@ def no_model_or_docker(monkeypatch):
         raise AssertionError("multiagent tests must not use network, real models, or Docker")
 
     monkeypatch.setattr(socket.socket, "connect", forbidden)
+    monkeypatch.setattr(socket.socket, "connect_ex", forbidden)
+    monkeypatch.setattr(socket, "create_connection", forbidden)
+    monkeypatch.setattr(socket, "getaddrinfo", forbidden)
     monkeypatch.setattr(OpenClawRunner, "_docker", forbidden)
     monkeypatch.setenv("MINIMAX_API_KEY", "synthetic-test-key")
     for key in ("AUTOSKILL_LLM_MODEL", "AUTOSKILL_LLM_BASE_URL", "AUTOSKILL_REPO", "MISEVOLVE_AUTOSKILL_DIR"):

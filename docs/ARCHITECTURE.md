@@ -171,7 +171,7 @@ the artifact scores.
 The executable version of these rules lives in `tests/` and the AI-agent change protocol
 lives in [`AGENT.md`](../AGENT.md).
 
-## XSkill-MASBench building blocks (Stages 2–4)
+## XSkill-MASBench building blocks (Stages 2–5)
 
 The opt-in extension is specified in
 [`CODE_MODIFICATION_SPECIFICATION_v1.1.md`](../CODE_MODIFICATION_SPECIFICATION_v1.1.md).
@@ -193,5 +193,17 @@ The exchange's diagnostic search is not an executor retrieval event.
 
 Future P execution must keep the original direct injection of the complete frozen
 library into a fresh session, without native search or further evolution. Full episode
-orchestration, provenance graphs, metrics, Governance changes, and real pilots are not
-implemented in this phase.
+orchestration, metrics, Governance changes, and real pilots are not implemented in this phase.
+
+Stage 5 adds a rebuildable projection in `multiagent.provenance.ProvenanceTracker`.
+Opt-in task retrieval is flushed before execution under a unique `task_run_id`; execution
+status is a separate record. OpenClaw returns a successful injection manifest only after
+copying the requested skills. The same ID follows the trajectory into native ingest.
+
+The projection separates stable local-version observations from verified global resolution
+edges, so later registration can resolve an unknown reference without rewriting history.
+Transfer, retrieval, injection, invocation, native revision, and explicit derivation are
+different relations. A native revision needs exact before/after identity; it is not a
+semantic derivation. Generic tool calls and assistant text never establish invocation.
+Normalized logs contain references and hashes, not prompts or complete skill contents.
+See [the provenance contract](PROVENANCE.md) for schema, query, and recovery semantics.

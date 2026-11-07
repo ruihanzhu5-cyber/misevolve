@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import uuid
 from pathlib import Path
 
 import anthropic
@@ -158,21 +159,35 @@ class AutoSkill(harness.MethodHarness):
         self._last_retrieved: list[harness.Skill] = []
 
     def run_task(self, prompt: str, *, kind: str, pos: int, out_dir: Path) -> "harness.Trajectory":
+        task = {"pos": pos, "kind": kind}
+        if self._exchange is not None:
+            task["task_run_id"] = uuid.uuid4().hex
         skills = self._retrieve(prompt)
         self._last_retrieved = skills
-        retrieved = [self._exchange.snapshot(s.key) for s in skills] if self._exchange is not None else []
-        traj = self.agent.run(prompt, skills, out_dir=out_dir)
+        if self._exchange is None:
+            traj = self.agent.run(prompt, skills, out_dir=out_dir)
+        else:
+            self._exchange.record_retrieval(task, skills, status=self._last_retrieval_status)
+            try:
+                retrieved = [self._exchange.snapshot(s.key) for s in skills]
+                traj = self.agent.run(prompt, skills, out_dir=out_dir)
+            except BaseException as exc:
+                self._exchange.record_execution(task, error_type=type(exc).__name__)
+                raise
+            self._exchange.record_execution(task, trajectory=traj)
         self._prompt_by_traj[id(traj)] = prompt
         if self._exchange is not None:
             self._retrieved_by_traj[id(traj)] = retrieved
-            self._task_by_traj[id(traj)] = {"pos": pos, "kind": kind}
+            self._task_by_traj[id(traj)] = task
         return traj
 
     def _retrieve(self, query: str) -> "list[harness.Skill]":
         """AutoSkill native retrieval -> harness.Skill list (full SKILL.md text)."""
+        self._last_retrieval_status = "completed"
         try:
             hits = self.sdk.search(query, user_id=self._UID, limit=self._top_k, scope="all")
         except Exception as e:
+            self._last_retrieval_status = "failed"
             print(f"[autoskill] search failed: {e}", flush=True)
             return []
         out: list[harness.Skill] = []
@@ -183,6 +198,7 @@ class AutoSkill(harness.MethodHarness):
             try:
                 text = self.sdk.export_skill_md(s.id) or ""
             except Exception:
+                self._last_retrieval_status = "partial"
                 text = ""
             if not text.strip():
                 continue
@@ -204,8 +220,10 @@ class AutoSkill(harness.MethodHarness):
                 ingest = self.sdk.ingest
                 if self._exchange is not None:
                     def ingest(**kwargs):
+                        task_info = {**self._task_by_traj.get(id(traj), {}), "kind": kind, "round": round_idx}
+                        kwargs["metadata"] = {**kwargs["metadata"], "task_run_id": task_info.get("task_run_id")}
                         return self._exchange.ingest(
-                            task={**self._task_by_traj.get(id(traj), {}), "kind": kind, "round": round_idx},
+                            task=task_info,
                             retrieved=self._retrieved_by_traj.get(id(traj), []), **kwargs,
                         )
                 ingest(

@@ -10,7 +10,16 @@ from dataclasses import asdict
 from pathlib import Path
 
 from ._io import append_jsonl, atomic_json, canonical_json, read_jsonl
-from .models import MAX_SKILL_BYTES, SkillOrigin, UnsupportedSkillError, content_hash, text_skill_files
+from .models import MAX_SKILL_BYTES, SkillOrigin, UnsupportedSkillError, content_hash, text_skill_files, valid_evidence
+
+
+def skill_reference(bundle: dict) -> dict:
+    """A content-free reference to the version observed at a particular boundary."""
+    return {
+        "local_skill_id": bundle.get("local_skill_key", bundle.get("local_skill_id")),
+        "content_hash": bundle.get("content_hash"), "origin": bundle.get("origin", "unknown"),
+        "imported_global_skill_id": bundle.get("imported_from_global_id", bundle.get("imported_global_skill_id")),
+    }
 
 
 def export_bundle(sdk, local_skill_key: str) -> dict:
@@ -57,6 +66,7 @@ class AutoSkillExchange:
         self.origins: dict[str, dict] = {}
         self.events: list[dict] = []
         self.evolution_path = self.episode_dir / "evolution_events.jsonl"
+        self.task_path = self.episode_dir / "task_events.jsonl"
         if self.state_path.exists():
             data = json.loads(self.state_path.read_text(encoding="utf-8"))
             if (data.get("schema_version"), data.get("user_id"), data.get("worker_id")) != (1, user_id, worker_id):
@@ -94,6 +104,54 @@ class AutoSkillExchange:
     def snapshot_store(self) -> dict[str, dict]:
         return {s.id: self.snapshot(s.id) for s in self.sdk.list(user_id=self.user_id)}
 
+    def _task_event(self, kind: str, task: dict, **fields) -> dict:
+        event = {
+            "schema_version": 1, "event": kind, "event_id": uuid.uuid4().hex,
+            "worker_id": self.worker_id, "task_run_id": task["task_run_id"],
+            "pos": task.get("pos"), "kind": task.get("kind"), **fields,
+        }
+        append_jsonl(self.task_path, event)
+        return event
+
+    def record_retrieval(self, task: dict, skills, *, status: str) -> None:
+        references = []
+        for skill in skills:
+            references.append(skill_reference({
+                **self.origins.get(skill.key, {}),
+                "local_skill_key": skill.key, "content_hash": content_hash({"SKILL.md": skill.text}),
+            }))
+        self._task_event("task_retrieval", task, retrieval_status=status, retrieved=references)
+
+    def record_execution(self, task: dict, *, trajectory=None, error_type: str | None = None) -> None:
+        raw = trajectory.raw if trajectory is not None and isinstance(trajectory.raw, dict) else {}
+        failed = (error_type is not None
+                  or (trajectory is not None and bool(trajectory.error or raw.get("prompt_error"))))
+        manifest = raw.get("_skill_injection")
+        # Only the manifest is copied. Prompts, assistant/tool text, and runner error messages stay out.
+        safe_manifest = None
+        if (isinstance(manifest, dict) and isinstance(manifest.get("skills"), list)
+                and all(isinstance(item, dict) for item in manifest["skills"])):
+            safe_manifest = {
+                "status": manifest.get("status"),
+                "skills": [{key: item.get(key) for key in (
+                    "local_skill_id", "runtime_skill_name", "runtime_directory_slug", "runtime_content_hash",
+                )} for item in manifest.get("skills", []) if isinstance(item, dict)],
+            }
+        self._task_event(
+            "task_execution", task, execution_status="failed" if failed else "completed",
+            error_type=error_type or ("runner_error" if failed else None), injection_manifest=safe_manifest,
+        )
+
+    def record_invocation_evidence(self, task_run_id: str, local_id: str, *, source_ref: str) -> None:
+        """For explicit runtime instrumentation only; never called from assistant/tool text heuristics."""
+        if not valid_evidence({"type": "explicit_invocation", "source_ref": source_ref}, "explicit_invocation"):
+            raise ValueError("explicit invocation requires a source_ref")
+        tasks = [row for row in read_jsonl(self.task_path) if row.get("task_run_id") == task_run_id]
+        if not tasks:
+            raise KeyError(task_run_id)
+        self._task_event("skill_invocation", tasks[0], skill=skill_reference(self.snapshot(local_id)),
+                         evidence={"type": "explicit_invocation", "source_ref": source_ref})
+
     def ingest(self, *, task: dict, retrieved: list[dict], **kwargs):
         """Observe native ingest without adding retrieval references or changing its inputs."""
         before = self.snapshot_store()
@@ -102,6 +160,11 @@ class AutoSkillExchange:
             "worker_id": self.worker_id, "task": dict(task), "retrieved": retrieved,
             "before": before, "after": {}, "returned_skills": [], "success": False,
             "updated_local_skill_ids": [], "error": None,
+            "invocation_evidence": [
+                {"skill": row["skill"], "evidence": row["evidence"], "source_event_id": row["event_id"]}
+                for row in read_jsonl(self.task_path)
+                if row.get("event") == "skill_invocation" and row.get("task_run_id") == task.get("task_run_id")
+            ],
         }
         try:
             updated = self.sdk.ingest(**kwargs)

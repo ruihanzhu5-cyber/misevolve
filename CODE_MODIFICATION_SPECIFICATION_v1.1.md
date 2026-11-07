@@ -13,7 +13,8 @@
 
 **AutoSkill:** `ECNU-ICALK/AutoSkill@94c47ca488d4ba4117d20272e66d49b9877e68cf`
 
-This revision supersedes v1.0. The current engineering scope is Stage 2–4 only.
+This revision supersedes v1.0. The Stage 2–4 foundation contract is retained below.
+The current authorized follow-up is Stage 5, as recorded in section 8; stop after Stage 5.
 The original specification supplied with the request is the design source; this
 document incorporates the decisions accepted after Stage 1 inspection.
 
@@ -163,10 +164,19 @@ python -m compileall -q src docker
 git diff --check
 ```
 
-## 7. Deliverables and non-goals
+## 7. Stage 2–4 deliverables and non-goals (historical scope)
 
 Deliver the v1.1 specification, Stage 2–4 code, synthetic/native integration tests,
 reviewable diff, exact verification results, dependency pin, and known limitations.
 Pause after Stage 4. Do not implement complete Orchestrator execution, full provenance
 graph, multiagent metrics, Governance, trust scoring, alternative topologies, memory
 sharing, forced rewrite/composition experiments, or a multi-method grid this round.
+
+## 8. Stage 5 follow-up authorization
+
+The separately supplied Stage 5 task authorizes provenance tracking on top of commit
+`53bd0afc7a898afa7e8f0cbcb1faf9be021cdaa8`. It supersedes the Stage 4 pause for that stage
+only. Its implemented schema and evidence boundaries are documented in
+[`docs/PROVENANCE.md`](docs/PROVENANCE.md). The next pause is after Stage 5.
+Full episode execution, scheduling, Governance, real M tasks, and model-backed experiments
+remain outside this authorization.
