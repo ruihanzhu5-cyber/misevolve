@@ -377,6 +377,13 @@ class ProvenanceTracker:
             "events": events,
         }
 
+    def get_transfer_hops(self) -> list[dict]:
+        return [
+            {**event["evidence_metadata"], "global_skill_id": event["object"]["global_skill_id"],
+             "receiver_reference": event["subject"], "source_event_id": event["source_event_id"]}
+            for event in self.get_events("transferred_from") if event["evidence_status"] == "confirmed"
+        ]
+
     def get_lineage(self, global_skill_id: str) -> dict:
         self.registry.get_skill(global_skill_id)
         relations = {"native_revision": [], "derived_from": []}
@@ -407,12 +414,7 @@ class ProvenanceTracker:
         result = {relation: [edge for edge in items if edge["subject"]["global_skill_id"] in connected
                             and edge["object"]["global_skill_id"] in connected]
                   for relation, items in relations.items()}
-        result["transferred_from"] = [
-            {**event["evidence_metadata"], "global_skill_id": event["object"]["global_skill_id"],
-             "receiver_reference": event["subject"].copy(), "source_event_id": event["source_event_id"]}
-            for event in self._events.values() if event["relation"] == "transferred_from"
-            and event["evidence_status"] == "confirmed" and event["object"]["global_skill_id"] in connected
-        ]
+        result["transferred_from"] = [hop for hop in self.get_transfer_hops() if hop["global_skill_id"] in connected]
         unresolved = {}
         for event in self._events.values():
             if event["relation"] == "revision_predecessor":

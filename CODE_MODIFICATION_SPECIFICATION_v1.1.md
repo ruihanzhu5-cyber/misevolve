@@ -14,7 +14,7 @@
 **AutoSkill:** `ECNU-ICALK/AutoSkill@94c47ca488d4ba4117d20272e66d49b9877e68cf`
 
 This revision supersedes v1.0. The Stage 2–4 foundation contract is retained below.
-The current authorized follow-up is Stage 5, as recorded in section 8; stop after Stage 5.
+The authorized follow-up ends after Stage 6 synthetic verification, as recorded in section 8.
 The original specification supplied with the request is the design source; this
 document incorporates the decisions accepted after Stage 1 inspection.
 
@@ -115,26 +115,28 @@ Import success and native-retrieval verification are separate event fields. If p
 verification fails, retain enough durable state to recover without a duplicate import;
 report failure explicitly. Empty transfer is recorded and does not manufacture a skill.
 
-## 5. Future clean receiver execution (Stage 6; not implemented this round)
+## 5. Clean receiver execution (Stage 6)
 
-Keep the original 21-task sequence unchanged:
+The `chain_clean_receiver_v1` schedule preserves all 21 original task definitions
+and source positions. For the first published episode, it executes the following batches in order.
 
-| Positions | Kind | Worker | Transfer after block evolution |
+| Source positions | Kind | Worker | Transfer after batch evolution |
 |---|---|---|---|
-| 1–3 | M | A | A → B, final version per changed local key |
-| 4–6 | B | B | B → C, final version per changed local key |
+| 1–3 | M | A | none |
 | 7–9 | M | A | none |
+| 13–15 | M | A | A → B, final version per changed local key across all three M batches |
+| 4–6 | B | B | B → C, final version per changed local key |
 | 10–12 | B | C | C → D, final version per changed local key |
-| 13–15 | M | A | none |
 | 16–18 | B | D | none |
 | 19 | P | B | none; no evolution |
 | 20 | P | C | none; no evolution |
 | 21 | P | D | none; no evolution |
 
-B/C/D never execute M tasks. Ingest each of three completed trajectories in original
-order after a learning block. Imported skill state is the only cross-agent channel;
-registry control metadata and upstream conversation/provenance logs are not injected.
-Keep complete failure rows and distinguish unknown causal attribution.
+A handles all exposure. B, C and D handle clean tasks and probes. Ingest completed
+trajectories in source-position order after each learning batch. Imported skill state
+is the only cross-agent channel. Keep complete failure rows and distinguish unknown
+causal attribution. The plan records both source order and execution order.
+See [the episode contract](docs/MULTIAGENT_EPISODE.md).
 
 ## 6. Development stages and tests
 
@@ -172,11 +174,12 @@ Pause after Stage 4. Do not implement complete Orchestrator execution, full prov
 graph, multiagent metrics, Governance, trust scoring, alternative topologies, memory
 sharing, forced rewrite/composition experiments, or a multi-method grid this round.
 
-## 8. Stage 5 follow-up authorization
+## 8. Stages 5–6 follow-up authorization
 
 The separately supplied Stage 5 task authorizes provenance tracking on top of commit
-`53bd0afc7a898afa7e8f0cbcb1faf9be021cdaa8`. It supersedes the Stage 4 pause for that stage
-only. Its implemented schema and evidence boundaries are documented in
-[`docs/PROVENANCE.md`](docs/PROVENANCE.md). The next pause is after Stage 5.
-Full episode execution, scheduling, Governance, real M tasks, and model-backed experiments
-remain outside this authorization.
+`53bd0afc7a898afa7e8f0cbcb1faf9be021cdaa8`. The next task authorizes Stage 5.1 hardening
+and Stage 6 synthetic verification on top of
+`67692583cb327fa7b920b5e1cfed8220e4adec19`. Stage 6 ends at the complete mock episode,
+with real experiments and Governance reserved for separate work. See
+[`docs/PROVENANCE.md`](docs/PROVENANCE.md) and
+[`docs/STAGE6_IMPLEMENTATION.md`](docs/STAGE6_IMPLEMENTATION.md).

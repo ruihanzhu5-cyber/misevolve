@@ -1,4 +1,4 @@
-"""Stage 2 worker lifecycle only. Episode execution belongs to a later stage."""
+"""Isolated worker lifecycle for the multi-agent episode layer."""
 
 from __future__ import annotations
 

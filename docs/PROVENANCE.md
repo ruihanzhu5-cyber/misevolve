@@ -1,7 +1,8 @@
 # Provenance contract
 
 `ProvenanceTracker` projects original journals without executing agents or calling models.
-It retains the Stage 2–4 single-writer assumption. Full episode scheduling is deferred.
+It retains the single-writer assumption. The serial episode layer synchronizes the projection
+after each learning batch and transfer. See [the episode contract](MULTIAGENT_EPISODE.md).
 
 ## Inputs and API
 
@@ -25,6 +26,7 @@ new_events = tracker.sync()  # includes bookkeeping evidence, not just graph edg
 events = tracker.get_events(relation="retrieved_from", worker_id="B")
 context = tracker.get_task_context(task_run_id)
 lineage = tracker.get_lineage(global_skill_id)
+hops = tracker.get_transfer_hops()
 ```
 
 The tracker refreshes registry evidence at synchronization. A second sync of unchanged

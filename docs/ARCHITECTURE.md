@@ -171,13 +171,14 @@ the artifact scores.
 The executable version of these rules lives in `tests/` and the AI-agent change protocol
 lives in [`AGENT.md`](../AGENT.md).
 
-## XSkill-MASBench building blocks (Stages 2–5)
+## XSkill-MASBench multi-agent episode (Stages 2–6)
 
 The opt-in extension is specified in
 [`CODE_MODIFICATION_SPECIFICATION_v1.1.md`](../CODE_MODIFICATION_SPECIFICATION_v1.1.md).
-`multiagent.orchestrator.MultiAgentOrchestrator` currently owns initialization and
-cleanup only: four distinct runners, methods, SDKs, and native stores. It has no episode
-execution loop. The original `harness.run_episode` and CLI are unchanged.
+`multiagent.orchestrator.MultiAgentOrchestrator` owns initialization and cleanup of
+four distinct runners, methods, SDKs, and native stores. The opt-in
+`multiagent.episode.run_episode` owns the serial schedule, injected judges and metrics.
+The original `harness.run_episode` and CLI retain their single-agent entry points.
 
 The append-only registry keeps every observed native artifact version. Its observation
 journal selects only the final version per local key for a named block, including a
@@ -191,14 +192,17 @@ no exchange component writes vector records. Extra resources are explicitly reje
 Transfer, task retrieval, invocation, and derivation remain separate evidence types.
 The exchange's diagnostic search is not an executor retrieval event.
 
-Future P execution must keep the original direct injection of the complete frozen
-library into a fresh session, without native search or further evolution. Full episode
-orchestration, metrics, Governance changes, and real pilots are not implemented in this phase.
+The episode layer evolves each learning batch, registers all observed versions, and
+transfers final versions at A → B, B → C and C → D boundaries. P execution directly
+injects each receiver's complete frozen library into a fresh session and bypasses search
+and evolution. The benchmark row schema is retained and episode reports include worker
+allocation, transfers, and provenance. See [the episode contract](MULTIAGENT_EPISODE.md).
 
-Stage 5 adds a rebuildable projection in `multiagent.provenance.ProvenanceTracker`.
-Opt-in task retrieval is flushed before execution under a unique `task_run_id`; execution
-status is a separate record. OpenClaw returns a successful injection manifest only after
-copying the requested skills. The same ID follows the trajectory into native ingest.
+The rebuildable projection lives in `multiagent.provenance.ProvenanceTracker`.
+Native retrieval and injection intent are flushed before execution under a unique
+`task_run_id`. Execution status is a separate record. OpenClaw reports the copied skills
+in an injection manifest, and the projection validates the complete manifest against
+prior intent. The same task ID follows the trajectory into native ingest.
 
 The projection separates stable local-version observations from verified global resolution
 edges, so later registration can resolve an unknown reference without rewriting history.

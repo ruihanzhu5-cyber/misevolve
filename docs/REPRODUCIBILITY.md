@@ -152,3 +152,24 @@ Source rewrites, ID/content conflicts, removed source records, and incomplete JS
 fail explicitly. A process interruption can leave a durable retrieval without completion;
 execution and injection then remain unknown. Do not replace unknown evidence with failure,
 success, invocation, or semantic derivation. See [PROVENANCE.md](PROVENANCE.md).
+
+## Stage 6 serial episode verification
+
+Use the same pinned SDK and local test environment. The integration test reads the first
+published episode and passes its 21 prompts only to MockRunner instances. Deterministic
+judges and synthetic LLM responses exercise actual local AutoSkill search, extraction,
+maintenance, import and export. The test reconstructs the complete chain from source
+journals in a fresh provenance projection.
+
+```bash
+.venv/Scripts/python.exe -m pytest -q tests/multiagent/test_multiagent_episode.py
+.venv/Scripts/python.exe -m pytest -q --ignore=tests/multiagent/test_multiagent_episode.py
+.venv/Scripts/python.exe -m pytest -q
+```
+
+Archive the plan, episode checkpoint and task rows with all source journals, artifact
+directories, and the provenance projection. UUIDs and latencies are run-specific.
+Reconstruction compares event identities and evidence for the same input journals.
+The episode reports use fixed planned task denominators. Keep incomplete attempts
+separate from complete episodes when running legacy aggregation.
+See [the episode contract](MULTIAGENT_EPISODE.md).
