@@ -28,6 +28,7 @@ SESSIONS_DIR = f"{OPENCLAW_HOME}/agents/main/sessions"
 GATEWAY_URL = "http://localhost:18789"
 
 active_sessions: Dict[str, dict] = {}
+STAGE7 = os.environ.get("MISEVOLVE_OPENCLAW_STAGE7") == "1"
 
 
 def async_retry(
@@ -115,6 +116,35 @@ def get_all_session_files() -> List[str]:
     return [f for f in files if not f.endswith("sessions.json")]
 
 
+def _stage7_session_key(session_id: str) -> str:
+    return f"agent:main:stage7-{session_id}"
+
+
+async def _gateway_history(session_id: str) -> dict:
+    params = json.dumps({"key": _stage7_session_key(session_id), "limit": 100})
+    process = await asyncio.create_subprocess_exec(
+        "openclaw", "gateway", "call", "sessions.get", "--params", params, "--json",
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, _ = await asyncio.wait_for(process.communicate(), timeout=30)
+    except TimeoutError as exc:
+        process.kill()
+        await process.wait()
+        raise HTTPException(status_code=504, detail="OpenClaw history request timed out") from exc
+    if process.returncode != 0:
+        raise HTTPException(status_code=502, detail="OpenClaw gateway did not return session history")
+    try:
+        messages = json.loads(stdout)["messages"]
+        if not isinstance(messages, list):
+            raise ValueError("invalid messages")
+    except (ValueError, KeyError, TypeError) as exc:
+        raise HTTPException(status_code=502, detail="Invalid OpenClaw gateway history") from exc
+    history = [m if m.get("type") == "message" and isinstance(m.get("message"), dict)
+               else {"type": "message", "message": m} for m in messages if isinstance(m, dict)]
+    return {"session_id": session_id, "total_records": len(history), "history": history}
+
+
 @async_retry(max_attempts=3, base_delay=0.2, exceptions=(IOError, OSError))
 async def read_session_metadata(session_id: str) -> Optional[Dict]:
     """Read session metadata from sessions.json"""
@@ -154,11 +184,12 @@ async def count_session_messages(session_file: str) -> int:
         return 0
 
 
-@async_retry(max_attempts=5, base_delay=1.0, exceptions=(Exception,))
+@async_retry(max_attempts=int(os.environ.get("MISEVOLVE_OPENCLAW_PROMPT_ATTEMPTS", "5")), base_delay=1.0)
 async def send_prompt_to_openclaw(session_id: str, prompt: str) -> Dict:
     """Send a prompt to OpenClaw via CLI"""
     try:
-        cmd = ["openclaw", "agent", "--message", prompt, "--session-id", session_id, "--json"]
+        selector = ["--session-key", _stage7_session_key(session_id)] if STAGE7 else ["--session-id", session_id]
+        cmd = ["openclaw", "agent", "--message", prompt, *selector, "--json"]
 
         process = await asyncio.create_subprocess_exec(
             *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
@@ -171,6 +202,16 @@ async def send_prompt_to_openclaw(session_id: str, prompt: str) -> Dict:
             raise Exception(f"OpenClaw command failed: {error_msg}")
 
         response_text = stdout.decode()
+        if STAGE7:
+            try:
+                result = json.loads(response_text)
+            except ValueError as exc:
+                raise ValueError("invalid OpenClaw agent JSON") from exc
+            if result.get("status") not in ("ok", "completed", "success"):
+                raise RuntimeError("OpenClaw agent did not complete")
+            payloads = (result.get("result") or {}).get("payloads", [])
+            return {"response": "\n".join(item["text"] for item in payloads if isinstance(item.get("text"), str)),
+                    "status": "completed"}
 
         try:
             lines = response_text.strip().split("\n")
@@ -304,6 +345,8 @@ async def export_session(session_id: str):
 @app.get("/sessions/{session_id}/history")
 async def get_session_history(session_id: str):
     """Get complete session history including all tool calls"""
+    if STAGE7:
+        return await _gateway_history(session_id)
     session_file = get_session_file_path(session_id)
 
     if not os.path.exists(session_file):

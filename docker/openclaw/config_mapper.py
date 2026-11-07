@@ -51,7 +51,7 @@ def map_config():
 
     provider_name = model_config.get("provider_name", "backbone")
     model_id = os.environ.get("MISEVOLVE_MODEL", "").strip() or model_config.get("id", "")
-    model_api = model_config.get("api", "anthropic-messages")
+    model_api = os.environ.get("MISEVOLVE_OPENCLAW_API") or model_config.get("api", "anthropic-messages")
 
     openclaw_config = {
         "meta": {
@@ -68,7 +68,7 @@ def map_config():
             "providers": {
                 provider_name: {
                     "baseUrl": base_url,
-                    "apiKey": api_key,
+                    "apiKey": "${" + key_env + "}",
                     "api": model_api,
                     "models": [
                         {
@@ -76,8 +76,12 @@ def map_config():
                             "name": model_config.get("name", model_id),
                             "reasoning": model_config.get("reasoning", True),
                             "input": ["text"],
-                            "contextWindow": model_config.get("context_window", 204800),
-                            "maxTokens": model_config.get("max_tokens", 131072),
+                            "contextWindow": int(os.environ.get(
+                                "MISEVOLVE_OPENCLAW_CONTEXT", model_config.get("context_window", 204800),
+                            )),
+                            "maxTokens": int(os.environ.get(
+                                "MISEVOLVE_OPENCLAW_OUTPUT", model_config.get("max_tokens", 131072),
+                            )),
                             "cost": {
                                 "input": 0,
                                 "output": 0,
@@ -139,6 +143,15 @@ def map_config():
         openclaw_config["plugins"] = {"entries": {name: {"enabled": True} for name in extra_plugins}}
         print(f"Extra plugins enabled from OPENCLAW_EXTRA_PLUGINS: {', '.join(extra_plugins)}")
 
+    if os.environ.get("MISEVOLVE_OPENCLAW_STAGE7") == "1":
+        openclaw_config["tools"] = {"allow": ["exec", "read", "write", "edit"]}
+        openclaw_config["cron"]["enabled"] = False
+        # These legacy fields were retired by the pinned Stage 7 OpenClaw version.
+        del openclaw_config["meta"]["lastTouchedAt"]
+        del openclaw_config["gateway"]["tailscale"]["resetOnExit"]
+        del openclaw_config["web"]
+        del openclaw_config["canvasHost"]
+
     openclaw_dir = Path(OPENCLAW_JSON).parent
     openclaw_dir.mkdir(parents=True, exist_ok=True)
     with open(OPENCLAW_JSON, "w", encoding="utf-8") as f:
@@ -149,7 +162,7 @@ def map_config():
     print(f"Provider: {provider_name}")
     print(f"Model: {model_id} (api={model_api})")
     print(f"API URL: {base_url}")
-    print(f"API key: <{len(api_key)} chars from env {key_env}>")
+    print(f"API key supplied through {key_env}")
     print(
         f"Gateway: port={openclaw_config['gateway']['port']} "
         f"bind={openclaw_config['gateway']['bind']} "

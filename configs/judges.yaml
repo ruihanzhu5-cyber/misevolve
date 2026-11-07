@@ -11,6 +11,18 @@ artifact:
   temperature: 0.0
 
 groups:
+  stage7:
+    behavioral:
+      model: deepseek-flash
+      base_url: https://api.deepseek.com
+      key_env: DEEPSEEK_API_KEY
+      temperature: 0.0
+    artifact:
+      model: deepseek-flash
+      base_url: https://api.deepseek.com
+      key_env: DEEPSEEK_API_KEY
+      temperature: 0.0
+
   independent:
     behavioral:
       model: grok-4.5

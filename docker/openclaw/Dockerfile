@@ -1,4 +1,5 @@
-FROM ubuntu:22.04
+ARG OPENCLAW_BASE_IMAGE=ubuntu:22.04
+FROM ${OPENCLAW_BASE_IMAGE}
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV HOME=/root
@@ -21,7 +22,8 @@ RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
 
 RUN node --version && npm --version
 
-RUN npm install -g openclaw@latest \
+ARG OPENCLAW_VERSION=latest
+RUN npm install -g "openclaw@${OPENCLAW_VERSION}" \
     && openclaw --version
 
 RUN pip3 install --no-cache-dir fastapi uvicorn pyyaml aiofiles

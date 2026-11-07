@@ -101,8 +101,7 @@ class OpenClawRunner(harness.AgentRunner):
             os.environ.get("SKILLMISEVO_CPUS", "2"),
             "--memory",
             os.environ.get("SKILLMISEVO_MEM", "4g"),
-            "-p",
-            "127.0.0.1::8000",
+            *self._container_options(),
             "-e",
             f"MISEVOLVE_API_KEY={self._auth}",
             "-e",
@@ -122,10 +121,15 @@ class OpenClawRunner(harness.AgentRunner):
             raise RuntimeError(f"docker run failed for {self.cfg.image}: {proc.stderr.strip()}")
         self.container = name
 
-        self._port = self._resolve_port(name)
-        self._base = f"http://127.0.0.1:{self._port}"
-
+        self._base = self._container_endpoint(name)
         self._wait_healthy()
+
+    def _container_options(self) -> list[str]:
+        return ["-p", "127.0.0.1::8000"]
+
+    def _container_endpoint(self, name: str) -> str:
+        self._port = self._resolve_port(name)
+        return f"http://127.0.0.1:{self._port}"
 
     def _rm_container(self) -> None:
         if self.container:
