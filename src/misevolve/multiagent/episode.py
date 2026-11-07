@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 from time import perf_counter
 
+from misevolve.adapters._normalize import normalize
 from misevolve.harness import ContentJudgeFn, JudgeFn, Skill, TaskOutcome, Trajectory, _retrieved_unsafe
 
+from ._episode_checkpoint import load_checkpoint
 from ._io import append_jsonl, atomic_json, canonical_json, read_jsonl
 from .episode_metrics import summarize_episode
+from .exchange import skill_reference
 from .models import SkillArtifact, WorkerRuntime
 from .orchestrator import MultiAgentOrchestrator
 from .provenance import ProvenanceTracker
@@ -77,7 +81,7 @@ def _plan(episode: dict) -> tuple[dict, list[_Batch]]:
     }, batches
 
 
-def _verify_workers(workers: dict[str, WorkerRuntime], run_dir: Path) -> None:
+def _verify_workers(workers: dict[str, WorkerRuntime], run_dir: Path, *, resumed: bool) -> None:
     for parts in (
         [worker.runner for worker in workers.values()],
         [worker.method for worker in workers.values()],
@@ -96,7 +100,7 @@ def _verify_workers(workers: dict[str, WorkerRuntime], run_dir: Path) -> None:
                 or exchange.sdk is not method.sdk or exchange.worker_id != key
                 or Path(method.sdk.store.path).resolve() != store or store != root / "autoskill_store"):
             raise ValueError("worker resources are bound outside their designated scope")
-        if method.sdk.list(user_id=exchange.user_id):
+        if not resumed and method.sdk.list(user_id=exchange.user_id):
             raise ValueError("the episode requires empty initial Skill Stores")
 
 
@@ -105,6 +109,25 @@ def _task_execution(path: Path, task_run_id: str) -> dict | None:
     if events and events[-1]["event"] == "task_execution" and events[-1]["task_run_id"] == task_run_id:
         return events[-1]
     return None
+
+
+def _restore_trace(worker, task, row):
+    path = worker.episode_dir / f"p{task['pos']:02d}_{task['kind']}" / "trajectory_raw.json"
+    trajectory = normalize(json.loads(path.read_text(encoding="utf-8")))
+    exchange = worker.method._exchange
+    run_id = row["task_run_id"]
+    events = [event for event in read_jsonl(exchange.task_path) if event["task_run_id"] == run_id]
+    retrieval, = [event for event in events if event["event"] == "task_retrieval"]
+    execution, = [event for event in events if event["event"] == "task_execution"]
+    if trajectory.error or trajectory.raw.get("prompt_error") or execution["execution_status"] != "completed":
+        raise ValueError("checkpoint trajectory is inconsistent with successful execution")
+    retrieved = [exchange.snapshot(ref["local_skill_id"]) for ref in retrieval["retrieved"]]
+    if [skill_reference(snapshot) for snapshot in retrieved] != retrieval["retrieved"]:
+        raise ValueError("checkpoint retrieval versions differ from the restored native Store")
+    worker.method._remember_task(trajectory, task["prompt"], {
+        "pos": task["pos"], "kind": task["kind"], "task_run_id": run_id,
+    }, retrieved)
+    return trajectory, TaskOutcome(row["attack_success"], row["task_success"])
 
 
 def _task_row(
@@ -215,24 +238,27 @@ def run_episode(
     episode: dict, orchestrator: MultiAgentOrchestrator, *, judge: JudgeFn, content_judge: ContentJudgeFn,
     before_task=None, judge_version=None, judge_failed: bool = False,
 ) -> list[dict]:
-    """Own worker setup/cleanup and execute one episode in an empty output directory."""
+    """Execute an episode in a fresh directory or a verified checkpoint copy."""
     plan, batches = _plan(episode)
     run_dir = orchestrator.run_dir
-    if set(orchestrator.worker_ids) != set(WORKERS) or orchestrator.resume or orchestrator.workers:
+    if set(orchestrator.worker_ids) != set(WORKERS) or orchestrator.workers:
         raise ValueError("the episode requires a fresh pool of workers A, B, C and D")
-    if run_dir.exists() and any(run_dir.iterdir()):
+    checkpoint = load_checkpoint(run_dir, plan, batches) if orchestrator.resume else None
+    if not checkpoint and run_dir.exists() and any(run_dir.iterdir()):
         raise FileExistsError(f"episode output directory is nonempty: {run_dir}")
 
-    atomic_json(run_dir / "episode_plan.json", plan)
-    rows = []
-    artifacts = {}
+    if not checkpoint:
+        atomic_json(run_dir / "episode_plan.json", plan)
+    rows = checkpoint.rows if checkpoint else []
+    artifacts = {row["global_skill_id"]: row for row in rows if row["kind"] == "artifact"}
+    saved_tasks = checkpoint.tasks if checkpoint else []
     frozen = {}
     frozen_snapshots = {}
     registry = tracker = None
     checkpoint_path = run_dir / "episode_events.jsonl"
     phase = "setup"
-    last_task = None
-    attempted = 0
+    last_task = checkpoint.last_task if checkpoint else None
+    attempted = len(saved_tasks)
 
     def mark(name, **details):
         nonlocal phase
@@ -262,13 +288,21 @@ def run_episode(
         registry = GlobalSkillRegistry(run_dir / "registry")
         tracker = ProvenanceTracker(run_dir, registry)
         workers = orchestrator.setup_workers()
-        _verify_workers(workers, run_dir)
-        append_jsonl(checkpoint_path, {
-            "event": "workers_ready", "worker_ids": list(WORKERS), "initial_stores_empty": True,
-        })
+        _verify_workers(workers, run_dir, resumed=bool(checkpoint))
+        if checkpoint:
+            append_jsonl(checkpoint_path, {"event": "episode_resumed", "retained_tasks": attempted,
+                                           "retained_batches": checkpoint.completed_batches})
+        else:
+            append_jsonl(checkpoint_path, {
+                "event": "workers_ready", "worker_ids": list(WORKERS), "initial_stores_empty": True,
+            })
         transfers = SkillTransferManager(registry, workers)
         entries = iter(plan["tasks"])
-        for batch in batches:
+        for batch_index, batch in enumerate(batches):
+            if checkpoint and batch_index < checkpoint.completed_batches:
+                for _ in batch.tasks:
+                    next(entries)
+                continue
             worker = workers[batch.worker_id]
             kind = batch.tasks[0]["kind"]
             if kind == "P" and not frozen:
@@ -281,6 +315,16 @@ def run_episode(
             probe_before = len(read_jsonl(exchange.evolution_path)) if kind == "P" else None
             for task in batch.tasks:
                 entry = next(entries)
+                if entry["execution_index"] <= len(saved_tasks):
+                    row = saved_tasks[entry["execution_index"] - 1]
+                    task_run_ids.append(row["task_run_id"])
+                    if row["runner_success"]:
+                        trace, outcome = _restore_trace(worker, task, row)
+                        traces.append(trace)
+                        outcomes.append(outcome)
+                        if before_task:
+                            before_task(worker, entry, row["task_run_id"])
+                    continue
                 task_run_id = uuid.uuid4().hex
                 active = {**entry, "task_run_id": task_run_id}
                 mark("task_execution", active_task=active)

@@ -6,9 +6,9 @@ from collections import Counter
 
 import pytest
 
-from misevolve import harness
+from misevolve import harness, stage7_pilot
 from misevolve.bench.metrics import is_artifact, is_benign, is_malicious, is_persistence
-from misevolve.multiagent._io import read_jsonl
+from misevolve.multiagent._io import atomic_json, read_jsonl
 from misevolve.multiagent.episode import SCHEDULE, WORKERS, run_episode
 from misevolve.multiagent.exchange import skill_reference
 from misevolve.multiagent.orchestrator import MultiAgentOrchestrator
@@ -67,7 +67,7 @@ def scenario(tmp_path, episode, monkeypatch, runner_factory, method_factory, syn
                 assert pending["injection_source"] == "frozen_library"
                 assert ids == {skill.id for skill in method.sdk.list(user_id=exchange.user_id)}
             if pos in (4, 10, 16):
-                registry = GlobalSkillRegistry(run_dir / "registry")
+                registry = GlobalSkillRegistry(out_dir.parents[2] / "registry")
                 for row in registry.get_transfer_history():
                     if row["event"] != "skill_transfer" or row["target_agent"] != worker:
                         continue
@@ -88,9 +88,11 @@ def scenario(tmp_path, episode, monkeypatch, runner_factory, method_factory, syn
                 } for index, skill in enumerate(skills, 1)],
             }
             command = {"name": "exec", "input": {"command": "synthetic-arithmetic-1"}}
+            raw = {"tool_calls": [command], "_skill_injection": manifest,
+                   "final_text": "I invoked synthetic-arithmetic-1."}
+            atomic_json(out_dir / "trajectory_raw.json", raw)
             return harness.Trajectory(
-                [command], final_text="I invoked synthetic-arithmetic-1.",
-                raw={"tool_calls": [command], "_skill_injection": manifest},
+                [command], final_text=raw["final_text"], raw=raw,
             )
 
         monkeypatch.setattr(runner, "run", run)
@@ -343,6 +345,52 @@ def test_integrity_failure_stops_episode(episode, scenario, monkeypatch, phase):
     progress = read_json(pool.run_dir / "progress.json")
     assert progress["phase"] == "incomplete" and progress["failed_phase"] == phase
     assert progress["last_task"]["execution_index"] == metrics["attempted_tasks"]
+
+
+@pytest.mark.parametrize("stop_at, committed_batches", [(2, 0), (11, 3)])
+def test_continue_from_stopped_task_without_replaying_committed_work(episode, scenario, stop_at, committed_batches):
+    pool = scenario["pool"]
+    source = pool.run_dir.parent / "source"
+    pool.run_dir = source / "episode"
+    continuation = source.parent / "continuation"
+
+    def stop(worker, entry, run_id):
+        if entry["execution_index"] == stop_at:
+            interrupted = worker.episode_dir / f"p{entry['source_pos']:02d}_{entry['task_kind']}"
+            atomic_json(interrupted / "partial.json", {"task_run_id": run_id})
+            raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        run_episode(episode, pool, judge=_verdict, content_judge=_scores, before_task=stop)
+    previous_rows = read_json(pool.run_dir / "all_rows.json")
+    previous_events = read_jsonl(pool.run_dir / "episode_events.jsonl")
+    atomic_json(source / "run_manifest.json", {
+        "stage": "7.2", "run_id": source.name, "code_sha": "test", "configuration": {"task_timeout_seconds": None},
+    })
+    with pytest.raises(ValueError, match="has not stopped"):
+        stage7_pilot._continuation(source, episode)
+    atomic_json(source / "run.exit", 1)
+    checkpoint, metadata = stage7_pilot._continuation(source, episode)
+    assert (metadata["retained_tasks"], metadata["retained_batches"]) == (stop_at - 1, committed_batches)
+    assert checkpoint.interrupted["execution_index"] == stop_at
+    stage7_pilot._copy_checkpoint(source, continuation, checkpoint)
+    assert not list(continuation.rglob("partial.json")) and len(list(source.rglob("partial.json"))) == 1
+
+    scenario["runners"].clear()
+    scenario["methods"].clear()
+    restarted = MultiAgentOrchestrator(continuation / "episode", resume=True,
+                                      runner_factory=pool.runner_factory, method_factory=pool.method_factory)
+    rows = run_episode(episode, restarted, judge=_verdict, content_judge=_scores)
+    assert rows[:len(previous_rows)] == previous_rows
+    assert [pos for _, pos, _ in scenario["executions"]] == EXECUTION_ORDER
+    assert read_jsonl(pool.run_dir / "episode_events.jsonl") == previous_events
+    events = read_jsonl(restarted.run_dir / "episode_events.jsonl")
+    assert events[:len(previous_events)] == previous_events
+    assert Counter(event["event"] for event in events)["evolution_batch"] == 6
+    assert [(event["worker_id"], event["target_worker_id"]) for event in events
+            if event["event"] == "block_transfer"] == ROUTE
+    first = next(row for row in rows if row.get("execution_index") == stop_at)
+    assert first["task_run_id"] != checkpoint.interrupted["task_run_id"]
 
 
 @pytest.mark.parametrize("field", ["pos", "instance_id", "kind", "task_count"])

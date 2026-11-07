@@ -16,6 +16,7 @@ from contextlib import contextmanager
 from hashlib import sha256
 from importlib.metadata import version
 from pathlib import Path
+from urllib.error import URLError
 
 from . import harness
 from ._stage7_api import DEEPSEEK_MODEL, MINIMAX_MODEL, OPENCLAW_OUTPUT, ProviderCalls, ProviderError, Scope
@@ -23,7 +24,8 @@ from ._stage7_openclaw import Stage7Runner, execution_evidence, isolated_relay
 from .adapters.openclaw_runner import OpenClawRunner
 from .judges.artifact import RUBRIC
 from .judges.behavioral import _judge_prompt, _util_prompt
-from .multiagent._io import append_jsonl, atomic_json, read_jsonl
+from .multiagent._episode_checkpoint import load_checkpoint
+from .multiagent._io import append_jsonl, atomic_json, canonical_json, read_jsonl
 from .multiagent.episode import _plan, run_episode
 from .multiagent.orchestrator import MultiAgentOrchestrator
 from .paths import repo_root
@@ -33,6 +35,7 @@ POSITIONS = (1, 2, 3, 7, 8, 9, 13, 14, 15, 4, 5, 6, 10, 11, 12, 16, 17, 18, 19, 
 ROUTE = [("A", "B"), ("B", "C"), ("C", "D")]
 HISTORY_BYTES = 32 * 1024 * 1024
 CAPTURE_TIMEOUT = 120
+TASK_TIMEOUT = 1200
 TRANSFER_RULE = {
     "selection": "final_observed_version_per_local_key_in_completed_source_block",
     "export": "pinned_native_export_skill_dir",
@@ -88,11 +91,25 @@ def _decode_history(data: str) -> list[dict]:
 
 
 class PilotRunner(Stage7Runner):
+    gateway_timeout_seconds = TASK_TIMEOUT
+
+    def __init__(self, network, relay):
+        super().__init__(network, relay)
+        self._timeout = TASK_TIMEOUT
+
     def _container_options(self):
         return [*super()._container_options(), "--dns", "127.0.0.1",
                 "--sysctl", "net.ipv6.conf.all.disable_ipv6=1"]
 
     def _http(self, method, path, body=None, *, timeout):
+        if method == "POST" and path == "/prompt":
+            try:
+                return super()._http(method, path, body, timeout=timeout)
+            except (TimeoutError, URLError) as exc:
+                if isinstance(exc, URLError) and not isinstance(exc.reason, TimeoutError):
+                    raise
+                # Return a failed prompt response so the base runner still reads history.
+                return 504, {"status": "task_timeout"}
         if method != "GET" or not path.startswith("/sessions/") or not path.endswith("/history"):
             return super()._http(method, path, body, timeout=timeout)
         session_id = path.split("/")[2]
@@ -136,10 +153,12 @@ class PilotRunner(Stage7Runner):
             trajectory = OpenClawRunner.run(self, prompt, inject, out_dir=out_dir)
             history = trajectory.raw.get("history") or []
             evidence.update(execution_evidence(history))
+            timed_out = trajectory.raw.get("prompt_response") == {"status": "task_timeout"}
             evidence.update({
                 "session_id": trajectory.raw.get("session_id"), "history_records": len(history),
                 "history_complete": bool(history), "model_configuration": self.model_config,
-                "stop_reason": evidence["terminal_stop_reason"] or "missing_terminal",
+                "task_timeout_seconds": self._timeout,
+                "stop_reason": "task_timeout" if timed_out else evidence["terminal_stop_reason"] or "missing_terminal",
             })
             if evidence["stop_reason"] not in ("stop", "end_turn", "stop_sequence"):
                 trajectory.error = trajectory.error or "OpenClaw did not reach a normal terminal state"
@@ -238,6 +257,9 @@ def _configuration(calls, proof_path: Path):
             key: value for key, value in config["module_request_and_output_limits"].items() if key != "behavior_judge"
         },
         "openclaw_boot_timeout_seconds": int(os.environ.get("SKILLMISEVO_BOOT_TIMEOUT", "120")),
+        "task_timeout_seconds": TASK_TIMEOUT,
+        "gateway_task_timeout_seconds": TASK_TIMEOUT,
+        "stop_conditions": [*config["stop_conditions"], "task_timeout"],
         "gateway_start_probe_timeout_seconds": 95,
         "relay_client_socket_timeout_seconds": 15, "docker_cli_default_timeout_seconds": 120,
         "sandbox_cleanup_timeout_seconds": 60,
@@ -269,6 +291,57 @@ def _configuration(calls, proof_path: Path):
     return episode, manifest
 
 
+def _continuation(source, episode, manifest=None):
+    source = source.resolve(strict=True)
+    if not (source / "run.exit").is_file():
+        raise ValueError("the source run has not stopped and written run.exit")
+    if int((source / "run.exit").read_text(encoding="utf-8")) == 0:
+        raise ValueError("the source run completed; there is nothing to continue")
+    previous = json.loads((source / "run_manifest.json").read_text(encoding="utf-8"))
+    if previous["stage"] != "7.2" or previous["run_id"] != source.name:
+        raise ValueError("source is not a Stage 7.2 pilot run")
+    if manifest:
+        keys = ("runtime", "python", "dependencies", "preflight_sha256", "dataset_sha256", "plan",
+                "episode_environment", "transfer_rule", "routes", "judges")
+        ignored = {"task_timeout_seconds", "gateway_task_timeout_seconds", "stop_conditions"}
+        old = {key: value for key, value in previous["configuration"].items() if key not in ignored}
+        new = {key: value for key, value in manifest["configuration"].items() if key not in ignored}
+        if canonical_json(old) != canonical_json(new) or any(
+            canonical_json(previous[key]) != canonical_json(manifest[key]) for key in keys
+        ):
+            raise ValueError("source and continuation have different experiment settings")
+    checkpoint = load_checkpoint(source / "episode", *_plan(episode))
+    for name in ("model_calls.jsonl", "judge_results.jsonl"):
+        read_jsonl(source / name)
+    return checkpoint, {
+        "source_directory": str(source), "source_run_id": previous["run_id"], "source_code_sha": previous["code_sha"],
+        "source_task_timeout_seconds": previous["configuration"]["task_timeout_seconds"],
+        "source_continuation": previous.get("continuation"),
+        "retained_tasks": len(checkpoint.tasks), "retained_batches": checkpoint.completed_batches,
+        "first_execution_index": len(checkpoint.tasks) + 1, "interrupted_attempt": checkpoint.interrupted,
+    }
+
+
+def _copy_checkpoint(source, root, checkpoint):
+    if root.is_relative_to(source) or source.is_relative_to(root):
+        raise ValueError("the continuation must use a separate run directory")
+    episode = source / "episode"
+    if any(path.is_symlink() for path in (episode, *episode.rglob("*"))):
+        raise ValueError("checkpoint must not contain symbolic links")
+    interrupted = checkpoint.interrupted
+
+    def ignore(directory, _names):
+        if interrupted and Path(directory) == episode / "workers" / interrupted["worker_id"]:
+            return [f"p{interrupted['source_pos']:02d}_{interrupted['task_kind']}"]
+        return []
+
+    shutil.copytree(episode, root / "episode", ignore=ignore)
+    for name in ("model_calls.jsonl", "judge_results.jsonl"):
+        path = source / name
+        if path.is_file():
+            shutil.copy2(path, root / name)
+
+
 def _task_prompts(episode, trajectory, goal, prompt, kind):
     evidence = json.dumps(trajectory, ensure_ascii=False, separators=(",", ":"))
     yield "harm_judge", _judge_prompt().format(
@@ -280,7 +353,7 @@ def _task_prompts(episode, trajectory, goal, prompt, kind):
         yield "utility_judge", _util_prompt().format(target=prompt, trajectory=evidence, detail_logs_section="")
 
 
-def _pilot_summary(root, calls, started, *, error=None):
+def _pilot_summary(root, calls, started, *, error=None, continuation=None):
     episode = root / "episode"
     metrics_path = episode / "episode_metrics.json"
     metrics = json.loads(metrics_path.read_text(encoding="utf-8")) if metrics_path.is_file() else {}
@@ -342,6 +415,7 @@ def _pilot_summary(root, calls, started, *, error=None):
         "stage": "7.2", "run_id": calls.run_id, "status": "complete" if complete else "incomplete",
         "technical_acceptance": "passed" if technical else "incomplete", "issues": issues,
         "attempted_tasks": len(tasks), "elapsed_seconds": round(time.monotonic() - started, 3),
+        "continuation": continuation,
         "completed_hops": completed_hops, "tasks": tasks, "api": attempts,
         "error_type": type(error).__name__ if error is not None else None,
     })
@@ -350,6 +424,7 @@ def _pilot_summary(root, calls, started, *, error=None):
 
 def pilot(calls, root, episode, manifest):
     started = time.monotonic()
+    continuation = manifest.get("continuation")
     scopes = {}
     current = None
     log = root / "judge_results.jsonl"
@@ -360,7 +435,8 @@ def pilot(calls, root, episode, manifest):
             raise ProviderError("a provider authentication failure stopped the pilot")
         current = scopes[run_id] = Scope(run_id, worker.worker_id, entry["instance_id"])
         worker.runner.scope = current
-        print(f"[{entry['execution_index']:02d}/21] {worker.worker_id} {current.instance_id}", flush=True)
+        if not continuation or entry["execution_index"] >= continuation["first_execution_index"]:
+            print(f"[{entry['execution_index']:02d}/21] {worker.worker_id} {current.instance_id}", flush=True)
         worker.method._exchange.before_ingest = lambda task: _trace_native(
             worker, calls, scopes[task["task_run_id"]], worker.episode_dir / "native_responses.jsonl",
         )
@@ -387,16 +463,19 @@ def pilot(calls, root, episode, manifest):
                       log, artifact_id=artifact.global_skill_id, detailed_artifact=True)
 
     print(json.dumps(manifest["configuration"], sort_keys=True), flush=True)
+    if continuation:
+        print(json.dumps({"continuation": continuation}, sort_keys=True), flush=True)
     try:
         with _pilot_relay(calls) as (network, relay):
             pool = MultiAgentOrchestrator(root / "episode", backbone=BACKBONE,
+                                          resume=bool(continuation),
                                           runner_factory=lambda *_: PilotRunner(network, relay))
             run_episode(episode, pool, judge=judge, content_judge=None, before_task=before_task,
                         judge_version=judge_version, judge_failed=True)
     except BaseException as exc:
-        _pilot_summary(root, calls, started, error=exc)
+        _pilot_summary(root, calls, started, error=exc, continuation=continuation)
         raise
-    return _pilot_summary(root, calls, started)
+    return _pilot_summary(root, calls, started, continuation=continuation)
 
 
 def _status(root):
@@ -444,14 +523,25 @@ def _status(root):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("check", "run", "status"))
+    parser.add_argument("mode", choices=("check", "run", "status", "resume-check"))
     parser.add_argument("--output", type=Path)
     parser.add_argument("--credentials", type=Path)
     parser.add_argument("--preflight-report", type=Path)
+    parser.add_argument("--resume-from", type=Path)
     parser.add_argument("--deepseek-band", choices=("auto", "off-peak", "peak"), default="auto")
     args = parser.parse_args()
-    if args.mode in ("run", "status") and args.output is None:
-        parser.error("--output is required for run and status")
+    if args.mode in ("run", "status", "resume-check") and args.output is None:
+        parser.error("--output is required for run, status and resume-check")
+    if args.resume_from and args.mode != "run":
+        parser.error("--resume-from is only supported in run mode")
+    if args.mode == "resume-check":
+        episode, _, _ = _episode_and_plan()
+        try:
+            _, continuation = _continuation(args.output, episode)
+        except (ValueError, OSError, KeyError, TypeError) as exc:
+            parser.error(str(exc))
+        print(json.dumps(continuation, ensure_ascii=False, indent=2))
+        return
     if args.mode == "status":
         if not args.output.is_dir():
             parser.error("run directory does not exist")
@@ -472,6 +562,10 @@ def main():
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
     if any(item.name != "run.log" for item in root.iterdir()):
         raise FileExistsError("the pilot requires a fresh run directory")
+    if args.resume_from:
+        source = args.resume_from.resolve(strict=True)
+        checkpoint, manifest["continuation"] = _continuation(source, episode, manifest)
+        _copy_checkpoint(source, root, checkpoint)
     with (root / "run_manifest.json").open("x", encoding="utf-8") as handle:
         json.dump(manifest, handle, ensure_ascii=False, indent=2)
         handle.write("\n")

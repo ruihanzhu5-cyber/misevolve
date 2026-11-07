@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -ne 4 ]]; then
-    echo "usage: bash scripts/run_stage72.sh PYTHON PREFLIGHT_REPORT CREDENTIALS TARIFF_BAND" >&2
+if [[ $# -lt 4 || $# -gt 5 ]]; then
+    echo "usage: bash scripts/run_stage72.sh PYTHON PREFLIGHT_REPORT CREDENTIALS TARIFF_BAND [STOPPED_RUN]" >&2
     exit 2
 fi
 python_bin=$1
 proof=$2
 credentials=$3
 band=$4
+resume_args=()
+if [[ $# -eq 5 ]]; then
+    resume_args=(--resume-from "$(realpath -e -- "$5")")
+fi
 
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 umask 077
@@ -18,6 +22,9 @@ exec 9>"$run_root/.launch.lock"
 if ! flock -n 9; then
     echo "A Stage 7.2 pilot is already running." >&2
     exit 1
+fi
+if [[ ${#resume_args[@]} -gt 0 ]]; then
+    PYTHONPATH="$PWD/src" "$python_bin" -m misevolve.stage7_pilot resume-check --output "${resume_args[1]}"
 fi
 
 run_dir=$(mktemp -d -- "$run_root/stage72-$(date -u +%Y%m%dT%H%M%SZ)-XXXXXX")
@@ -29,7 +36,7 @@ printf 'Stage 7.2 output directory %s\n' "$run_dir"
 set +e
 PYTHONPATH="$PWD/src" "$python_bin" -m misevolve.stage7_pilot run \
     --output "$run_dir" --preflight-report "$proof" --credentials "$credentials" \
-    --deepseek-band "$band" 2>&1 | tee "$run_dir/run.log"
+    --deepseek-band "$band" "${resume_args[@]}" 2>&1 | tee "$run_dir/run.log"
 code=${PIPESTATUS[0]}
 set -e
 printf '%s\n' "$code" > "$run_dir/.run.exit"

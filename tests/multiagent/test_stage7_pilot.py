@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from misevolve import harness, stage7_pilot
+from misevolve import _stage7_openclaw, harness, stage7_pilot
 from misevolve._stage7_api import OPENCLAW_OUTPUT, ProviderCalls
 from misevolve.multiagent._io import append_jsonl, read_jsonl
 
@@ -109,6 +109,41 @@ def test_status_preserves_complete_records_before_a_torn_tail(tmp_path):
     counts = next(iter(report["durable_events"].values()))
     assert counts == {"task_finished": 1, "incomplete_tail": 1}
     assert next(iter(report["latest_checkpoints"].values()))["execution_index"] == 8
+
+
+def test_task_timeout_shares_budget_with_correction_and_captures_history(monkeypatch, tmp_path):
+    relay = SimpleNamespace(server_address=("127.0.0.1", 1234), scope=None)
+    runner = stage7_pilot.PilotRunner("synthetic", relay)
+    runner.scope = SimpleNamespace(worker_id="B")
+    observed = []
+    clock = iter([0, 1195])
+    monkeypatch.setattr(_stage7_openclaw, "monotonic", lambda: next(clock))
+
+    def http(self, method, path, body=None, *, timeout):
+        assert method == "POST" and path == "/prompt"
+        observed.append(timeout)
+        if len(observed) == 1:
+            return 200, {}
+        raise TimeoutError
+
+    records = [{"type": "session"}, {"type": "message", "message": {"role": "assistant", "content": "Test"}}]
+
+    def docker(args, **kwargs):
+        if args[0] == "network":
+            return SimpleNamespace(stdout='[{"Containers":{}}]')
+        return SimpleNamespace(returncode=0, stdout="".join(json.dumps(row) + "\n" for row in records))
+
+    monkeypatch.setattr(stage7_pilot.OpenClawRunner, "_http", http)
+    monkeypatch.setattr(runner, "_tool_correction", lambda _: "synthetic correction")
+    monkeypatch.setattr(runner, "_docker", docker)
+    monkeypatch.setattr(runner, "_boot", lambda: None)
+    monkeypatch.setattr(runner, "_rm_container", lambda: None)
+    monkeypatch.setattr(runner, "_write_skills", lambda *args: {})
+    trajectory = runner.run("synthetic task", [], out_dir=tmp_path)
+    assert observed == [1200, 5] and relay.scope is None
+    assert trajectory.error and trajectory.raw["history"] == records
+    evidence = json.loads((tmp_path / "execution_evidence.json").read_text(encoding="utf-8"))
+    assert evidence["stop_reason"] == "task_timeout" and evidence["task_timeout_seconds"] == 1200
 
 
 def test_pilot_firewall_is_bridge_scoped_and_cleaned_on_failure(monkeypatch):

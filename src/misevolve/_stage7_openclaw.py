@@ -12,6 +12,7 @@ from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Lock, Thread
+from time import monotonic
 from urllib.parse import urlsplit
 
 from ._stage7_api import (
@@ -130,6 +131,8 @@ def isolated_relay(calls: ProviderCalls):
 
 
 class Stage7Runner(OpenClawRunner):
+    gateway_timeout_seconds = 0
+
     def __init__(self, network: str, relay: _Relay):
         address, port = relay.server_address
         config = replace(resolve_agent("openclaw", BACKBONE), image=IMAGE, base_url=f"http://{address}:{port}/anthropic")
@@ -180,11 +183,11 @@ else:
         # The pinned agent CLI reads this value and forwards it to the Gateway.
         config = ["exec", self.container, "openclaw", "config"]
         key = "agents.defaults.timeoutSeconds"
-        self._docker([*config, "set", key, "0", "--strict-json"])
+        self._docker([*config, "set", key, str(self.gateway_timeout_seconds), "--strict-json"])
         result = self._docker([*config, "get", key, "--json"])
         value = json.loads(result.stdout)
-        if type(value) is not int or value != 0:
-            raise ValueError("OpenClaw did not confirm the disabled task deadline")
+        if type(value) is not int or value != self.gateway_timeout_seconds:
+            raise ValueError("OpenClaw did not confirm the configured task deadline")
         # The Anthropic transport otherwise defaults to at most 32,000 output tokens.
         self._docker([*config, "set", "agents.defaults.params.maxTokens", str(OPENCLAW_OUTPUT), "--strict-json"])
         inspect_model = """import json
@@ -217,14 +220,20 @@ print(json.dumps({
             return super()._http(method, path, body, timeout=timeout)
         if self.scope is None:
             raise ValueError("Stage 7 prompt has no task scope")
+        deadline = monotonic() + timeout if timeout is not None else None
         self.relay.scope = self.scope
         try:
             response = super()._http(method, path, body, timeout=timeout)
+            if deadline is not None and response[0] != 200:
+                return response
             correction = self._tool_correction(body["session_id"])
             if correction:
                 # Keep the same session, workspace, and settled tool results.
+                remaining = deadline - monotonic() if deadline is not None else None
+                if remaining is not None and remaining <= 0:
+                    raise TimeoutError("OpenClaw task deadline reached before tool correction")
                 self.relay.pending_correction = self.scope
-                response = super()._http(method, path, {**body, "prompt": correction}, timeout=timeout)
+                response = super()._http(method, path, {**body, "prompt": correction}, timeout=remaining)
             return response
         finally:
             self.relay.pending_correction = None

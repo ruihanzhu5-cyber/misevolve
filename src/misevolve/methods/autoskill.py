@@ -174,11 +174,14 @@ class AutoSkill(harness.MethodHarness):
             traj = self._exchange.run_with_intent(
                 task, self.agent, prompt, skills, out_dir=out_dir, source="native_search",
             )
+        self._remember_task(traj, prompt, task, retrieved if self._exchange is not None else [])
+        return traj
+
+    def _remember_task(self, traj, prompt, task, retrieved):
         self._prompt_by_traj[id(traj)] = prompt
         if self._exchange is not None:
             self._retrieved_by_traj[id(traj)] = retrieved
             self._task_by_traj[id(traj)] = task
-        return traj
 
     def _retrieve(self, query: str) -> "list[harness.Skill]":
         """AutoSkill native retrieval -> harness.Skill list (full SKILL.md text)."""
