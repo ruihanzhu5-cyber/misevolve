@@ -9,7 +9,7 @@ import urllib.error
 import urllib.request
 import uuid
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta, timezone
 from hashlib import sha256
 from http.client import IncompleteRead
@@ -52,6 +52,38 @@ class Scope:
     task_id: str
     worker_id: str
     instance_id: str | None = None
+    execution: ExecutionFence | None = field(default=None, compare=False, repr=False)
+
+
+class ExecutionFence:
+    """A turn's dispatch gate. A provider attempt admitted before cutoff can settle later."""
+
+    def __init__(self, deadline: float):
+        self.deadline = deadline
+        self._lock = Lock()
+        self._closed = False
+        self._active = set()
+        self.provider_failure = None
+
+    def open(self):
+        with self._lock:
+            return not self._closed and time.monotonic() < self.deadline
+
+    def admit(self, attempt_id):
+        with self._lock:
+            if self._closed or time.monotonic() >= self.deadline:
+                raise ProviderError("execution dispatch closed", category="task_deadline")
+            self._active.add(attempt_id)
+
+    def settle(self, attempt_id):
+        with self._lock:
+            self._active.remove(attempt_id)
+            return self._closed or time.monotonic() >= self.deadline
+
+    def close(self):
+        with self._lock:
+            self._closed = True
+            return sorted(self._active)
 
 
 class ProviderError(RuntimeError):
@@ -267,6 +299,10 @@ class ProviderCalls:
             elapsed = time.monotonic()
             started = datetime.now(UTC)
             peak = _weekday_peak(started) if self.deepseek_peak is None else self.deepseek_peak
+            fence = scope.execution
+            attempt_id = f"{call_id}:{attempt}"
+            if fence is not None:
+                fence.admit(attempt_id)
             try:
                 with opener.open(request, timeout=REQUEST_TIMEOUT) as response:
                     status = response.status
@@ -287,7 +323,7 @@ class ProviderCalls:
                     error = "http_error"
                 finally:
                     exc.close()
-            except (TimeoutError, urllib.error.URLError, ConnectionError, IncompleteRead) as exc:
+            except (OSError, IncompleteRead) as exc:
                 reason = getattr(exc, "reason", exc)
                 error = "timeout" if isinstance(reason, TimeoutError) else "transport_error"
             except (ValueError, TypeError, KeyError, AttributeError, ProviderError):
@@ -313,9 +349,15 @@ class ProviderCalls:
                 "price_band": ("peak" if peak else "off-peak") if deepseek else "standard",
             }
             with self._lock:
+                if fence is not None:
+                    row["late_after_execution_cutoff"] = fence.settle(attempt_id)
                 if status in (401, 403):
                     self._auth_failed = True
                 append_jsonl(self.path, row)
+                if row.get("late_after_execution_cutoff"):
+                    append_jsonl(self.path.with_name("late_executor_attempts.jsonl"), row)
+            if fence is not None and not fence.open():
+                raise ProviderError("execution ended before response delivery", category="task_deadline")
             if error is None:
                 return content, content_type
             if attempt == 1 and (error in RETRYABLE_TRANSPORT or status == 429
@@ -326,7 +368,8 @@ class ProviderCalls:
         raise AssertionError("provider retry loop exceeded")
 
     def summary(self, *, task_id: str | None = None) -> dict:
-        attempts = read_jsonl(self.path)
+        with self._lock:
+            attempts = read_jsonl(self.path)
         if task_id is not None:
             attempts = [row for row in attempts if row["task_id"] == task_id]
         costs = [row["cost"] for row in attempts if row["cost"] is not None]
@@ -347,6 +390,7 @@ class ProviderCalls:
                 if row.get("tool_argument_correction") and row["attempt"] == 1
             )),
             "provider_retries": sum(row["attempt"] > 1 for row in attempts),
+            "late_executor_attempts": sum(row.get("late_after_execution_cutoff") is True for row in attempts),
             "provider_timeouts": sum(row["status"] == "timeout" for row in attempts),
             "provider_transport_errors": sum(row["status"] == "transport_error" for row in attempts),
             "attempts_by_module": dict(counts),

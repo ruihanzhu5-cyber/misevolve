@@ -8,19 +8,46 @@ import secrets
 import uuid
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
+from subprocess import TimeoutExpired
+from tempfile import TemporaryDirectory
+from threading import Timer
+from time import monotonic
 from urllib.error import URLError
 
-from misevolve._stage7_api import Scope
+from misevolve._stage7_api import ExecutionFence, Scope
 from misevolve._stage7_openclaw import BACKBONE, NORMAL_STOP_REASONS, execution_evidence
 from misevolve.adapters import _normalize
 from misevolve.multiagent._io import atomic_json
-from misevolve.stage7_pilot import PilotRunner, _pilot_relay
+from misevolve.stage7_pilot import _READ_TRANSCRIPT as _NATIVE_TRANSCRIPT_READER
+from misevolve.stage7_pilot import HISTORY_BYTES, TASK_TIMEOUT, PilotRunner, _decode_history, _pilot_relay
 
 from .executor import SessionTurnError
 from .handoff import read_workspace_artifact, write_workspace_artifact
 
+TOOL_TIMEOUT_SECONDS = 120
+TOOL_YIELD_MS = 5000
+FREEZE_SECONDS = 15
+SNAPSHOT_SECONDS = 45
+REMOVE_SECONDS = 30
+_AGENT_DB = "/root/.openclaw/agents/main/agent/openclaw-agent.sqlite"
+_TOOLS = {"allow": ["exec", "process", "read", "write", "edit"],
+          "exec": {"timeoutSeconds": TOOL_TIMEOUT_SECONDS, "backgroundMs": TOOL_YIELD_MS}}
+
 
 class TeamOpenClawRunner(PilotRunner):
+    task_timeout_seconds = TASK_TIMEOUT
+
+    def _wait_healthy(self):
+        super()._wait_healthy()
+        config = ["exec", self.container, "openclaw", "config"]
+        self._docker([*config, "set", "tools", json.dumps(_TOOLS), "--strict-json"])
+        observed = json.loads(self._docker([*config, "get", "tools", "--json"]).stdout)
+        if observed != _TOOLS:
+            raise RuntimeError("OpenClaw did not confirm the Phase 3 process settings")
+
+    def bind_task_deadline(self, deadline):
+        self._task_deadline = deadline
+
     def read_artifact(self, relative_path):
         if not self.container or not getattr(self, "_team_session_id", None):
             raise RuntimeError("artifact source session is not open")
@@ -44,6 +71,8 @@ class TeamOpenClawRunner(PilotRunner):
         self._team_task = (task_run_id, task_id, agent_id)
         self._history = []
         self._turn = 0
+        self._task_deadline = None
+        self._frozen = False
         self._boot()
 
     def continue_task_session(self, prompt, inject, *, out_dir):
@@ -51,29 +80,80 @@ class TeamOpenClawRunner(PilotRunner):
             raise RuntimeError("open a team session before continuing it")
         run_id, task_id, agent_id = self._team_task
         self._turn += 1
-        self.scope = Scope(f"{run_id}:{agent_id}:{self._turn}", agent_id, task_id)
+        if self._task_deadline is None:
+            self._task_deadline = monotonic() + self.task_timeout_seconds
+        fence = ExecutionFence(self._task_deadline)
+        self.scope = Scope(f"{run_id}:{agent_id}:{self._turn}", agent_id, task_id, fence)
         self._task_dir = Path(out_dir)
         self._task_dir.mkdir(parents=True, exist_ok=False)
-        injection = self._write_skills(inject, self._task_dir)
+        injection = None
         session_id = self._team_session_id
         infrastructure_error = None
         status, response = None, {}
+        watchdog = None
+        cutoff = {}
+
+        def freeze_at_deadline():
+            cutoff["in_flight"] = fence.close()
+            try:
+                self._docker(["pause", self.container], timeout=FREEZE_SECONDS)
+                self._frozen = True
+            except Exception as exc:
+                cutoff["freeze_error"] = exc
+
         try:
+            if not fence.open():
+                raise TimeoutError("task deadline before Skill injection")
+            injection = self._write_skills(inject, self._task_dir)
+            remaining = self._task_deadline - monotonic()
+            if remaining <= 0:
+                raise TimeoutError("task deadline before model dispatch")
+            watchdog = Timer(remaining, freeze_at_deadline)
+            watchdog.start()
             status, response = self._http(
                 "POST", "/prompt", {"session_id": session_id, "prompt": prompt, "create_new_session": False},
-                timeout=self._timeout,
+                timeout=remaining,
             )
+            if monotonic() >= self._task_deadline:
+                status, response = 504, {"status": "task_timeout"}
         except Exception as exc:
             reason = exc.reason if isinstance(exc, URLError) else exc
             if isinstance(reason, TimeoutError):
                 status, response = 504, {"status": "task_timeout"}
             else:
                 infrastructure_error = exc
+        finally:
+            if watchdog is not None:
+                watchdog.cancel()
+                watchdog.join()
+            in_flight = fence.close()
+        if "in_flight" in cutoff:
+            in_flight = cutoff["in_flight"]
+            status, response = 504, {"status": "task_timeout"}
+        timed_out = response == {"status": "task_timeout"} or status in {408, 504}
+        containment = "normal"
         try:
+            if timed_out or status != 200 or infrastructure_error is not None:
+                # Do not read the live SQLite database or resume the task process after cutoff.
+                containment = "freeze_failed"
+                if "freeze_error" in cutoff:
+                    raise cutoff["freeze_error"]
+                if not self._frozen:
+                    self._docker(["pause", self.container], timeout=FREEZE_SECONDS)
+                    self._frozen = True
+                containment = "paused_before_snapshot"
             delta, transcript_status = self._transcript_delta(session_id)
         except Exception as exc:
             infrastructure_error = infrastructure_error or exc
             delta, transcript_status = [], "capture_error"
+        finally:
+            if containment != "normal":
+                try:
+                    self._remove_task_container()
+                    containment += "_then_removed"
+                except Exception as exc:
+                    infrastructure_error = exc
+                    containment += "_removal_unconfirmed"
         messages = [record["message"] for record in delta if record.get("type") == "message"]
         evidence = execution_evidence([{"message": message} for message in messages])
         # Only the transcript can supply assistant output. Keep the POST body for audit.
@@ -82,27 +162,40 @@ class TeamOpenClawRunner(PilotRunner):
         raw["_skill_injection"] = injection
         # Keep results from this turn in the member's own learning trajectory.
         raw["messages"] = []
+        tool_timeouts = []
+        tool_result_ids = set()
         for message in messages:
             role = message.get("role")
             call_id = message.get("toolCallId") or message.get("tool_call_id")
             if role in {"tool", "toolResult", "tool_result"} and (call_id or message.get("content")):
+                if isinstance(call_id, str) and call_id:
+                    tool_result_ids.add(call_id)
+                details = message.get("details")
+                details = details if isinstance(details, dict) else {}
+                if details.get("timedOut") is True:
+                    tool_timeouts.append(call_id)
                 raw["messages"].append({
                     "role": "tool", "content": message.get("content"),
-                    "tool_call_id": call_id, "is_error": message.get("isError"),
+                    "tool_call_id": call_id,
+                    "is_error": True if details.get("timedOut") is True else message.get("isError"),
                 })
             elif role == "assistant":
                 parsed = self._history_to_raw([{"type": "message", "message": message}], "", session_id)
                 raw["messages"].extend(parsed["assistant_messages"] + parsed["tool_calls"])
+        unpaired = sorted({call["id"] for call in raw["tool_calls"]
+                           if isinstance(call.get("id"), str) and call["id"]} - tool_result_ids)
         terminal = evidence["terminal_stop_reason"]
         terminal_message = messages[-1] if messages and messages[-1].get("role") == "assistant" else None
         raw["final_text"] = self._history_to_raw(
             [{"type": "message", "message": terminal_message}] if terminal_message else [], "", session_id,
         )["final_text"]
-        timed_out = response == {"status": "task_timeout"} or status in {408, 504}
-        if timed_out:
-            stop_reason = "task_timeout"
-        elif infrastructure_error is not None:
+        provider_timeout = fence.provider_failure == "timeout"
+        if infrastructure_error is not None:
             stop_reason = "infrastructure_error"
+        elif timed_out:
+            stop_reason = "task_timeout"
+        elif provider_timeout:
+            stop_reason = "model_request_timeout"
         elif status != 200:
             stop_reason = f"http_{status}"
         elif transcript_status != "captured":
@@ -111,13 +204,22 @@ class TeamOpenClawRunner(PilotRunner):
             stop_reason = "missing_terminal"
         elif terminal in NORMAL_STOP_REASONS and not raw["final_text"]:
             stop_reason = "missing_terminal_output"
+        elif terminal in NORMAL_STOP_REASONS and unpaired:
+            stop_reason = "unpaired_tool_calls"
         else:
             stop_reason = terminal
+        if tool_timeouts and stop_reason in {"error", "toolUse", "tool_use", "missing_terminal"}:
+            stop_reason = "tool_timeout"
         completed = stop_reason in NORMAL_STOP_REASONS
+        is_timeout = stop_reason in {"task_timeout", "model_request_timeout", "tool_timeout"}
         raw["_team_execution"] = {
-            **evidence, "execution_status": "completed" if completed else "timeout" if timed_out else "failed",
+            **evidence, "execution_status": "completed" if completed else "timeout" if is_timeout else "failed",
             "transcript_status": transcript_status, "stop_reason": stop_reason, "http_status": status,
             "evidence_completeness": "complete" if completed else "partial" if raw["messages"] else "none",
+            "cutoff": {"container": containment, "in_flight_attempt_ids": in_flight,
+                       "remote_cancel_supported": False},
+            "task_deadline_exhausted": timed_out, "provider_failure": fence.provider_failure,
+            "tool_timeout_call_ids": tool_timeouts, "unpaired_tool_call_ids": unpaired,
         }
         raw["_container"] = {"error": None if completed else f"OpenClaw turn stopped: {stop_reason}"}
         atomic_json(self._task_dir / "trajectory_raw.json", raw)
@@ -130,7 +232,10 @@ class TeamOpenClawRunner(PilotRunner):
 
     def _transcript_delta(self, session_id):
         try:
-            status, data = self._http("GET", f"/sessions/{session_id}/history", timeout=60)
+            if self._frozen:
+                status, data = self._read_frozen_history(session_id)
+            else:
+                status, data = self._http("GET", f"/sessions/{session_id}/history", timeout=60)
         except ValueError:
             # The Stage 7 capture adapter reports malformed/archived transcripts here.
             return [], "transcript_unavailable"
@@ -148,6 +253,38 @@ class TeamOpenClawRunner(PilotRunner):
         self._history = history
         return delta, "captured"
 
+    def _read_frozen_history(self, session_id):
+        deadline = monotonic() + SNAPSHOT_SECONDS
+        with TemporaryDirectory(prefix="misevolve-transcript-") as directory:
+            for suffix in ("", "-wal", "-shm"):
+                result = self._docker(["cp", f"{self.container}:{_AGENT_DB}{suffix}", directory],
+                                      timeout=max(.01, deadline - monotonic()), check=False)
+                if result.returncode:
+                    if "Could not find the file" not in result.stderr:
+                        raise RuntimeError("Docker could not copy the paused transcript")
+                    if not suffix:
+                        return 404, {}
+            reader = _NATIVE_TRANSCRIPT_READER.replace(
+                'homedir() + "/.openclaw/agents/main/agent/openclaw-agent.sqlite"',
+                '"/snapshot/openclaw-agent.sqlite"',
+            )
+            name = f"misevolve-frozen-reader-{uuid.uuid4().hex[:12]}"
+            try:
+                result = self._docker([
+                    "run", "--rm", "--name", name, "--network", "none", "--read-only", "--cap-drop", "ALL",
+                    "--memory", "512m", "--pids-limit", "64", "--security-opt", "no-new-privileges",
+                    "--mount", f"type=bind,source={directory},target=/snapshot",
+                    "--entrypoint", "node", self.cfg.image, "-e", reader,
+                    f"agent:main:stage7-{session_id}", str(HISTORY_BYTES),
+                ], timeout=max(.01, deadline - monotonic()), check=False)
+            except TimeoutExpired:
+                self._docker(["rm", "-f", name], timeout=REMOVE_SECONDS, check=False)
+                raise
+            if result.returncode:
+                raise ValueError("frozen transcript unavailable")
+            (self._task_dir / "session_raw.jsonl").write_text(result.stdout, encoding="utf-8", newline="\n")
+            return 200, {"history": _decode_history(result.stdout)}
+
     @staticmethod
     def _valid_transcript_record(record):
         if not isinstance(record, dict):
@@ -159,13 +296,18 @@ class TeamOpenClawRunner(PilotRunner):
 
     def close_task_session(self):
         try:
-            if self.container:
-                self._docker(["rm", "-f", self.container], timeout=60, check=True)
-                self.container = None
+            self._remove_task_container()
         finally:
             self._team_session_id = None
             self._history = []
             self.scope = None
+
+    def _remove_task_container(self):
+        if self.container:
+            result = self._docker(["rm", "-f", self.container], timeout=REMOVE_SECONDS, check=False)
+            if result.returncode and f"No such container: {self.container}" not in result.stderr:
+                raise RuntimeError("could not confirm task container removal")
+            self.container = None
 
     def teardown(self):
         self.close_task_session()

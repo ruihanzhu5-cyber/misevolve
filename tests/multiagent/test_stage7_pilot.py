@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from misevolve import _stage7_openclaw, harness, stage7_pilot
-from misevolve._stage7_api import OPENCLAW_OUTPUT, ProviderCalls
+from misevolve._stage7_api import OPENCLAW_OUTPUT, ProviderCalls, Scope
 from misevolve.multiagent._io import append_jsonl, read_jsonl
 
 
@@ -114,7 +114,7 @@ def test_status_preserves_complete_records_before_a_torn_tail(tmp_path):
 def test_task_timeout_shares_budget_with_correction_and_captures_history(monkeypatch, tmp_path):
     relay = SimpleNamespace(server_address=("127.0.0.1", 1234), scope=None)
     runner = stage7_pilot.PilotRunner("synthetic", relay)
-    runner.scope = SimpleNamespace(worker_id="B")
+    runner.scope = Scope("synthetic", "B")
     observed = []
     clock = iter([0, 1195])
     monkeypatch.setattr(_stage7_openclaw, "monotonic", lambda: next(clock))

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from copy import deepcopy
 
 from misevolve.harness import TaskOutcome, Trajectory
 
@@ -11,7 +12,7 @@ from .router import AGENTS
 
 def _judge_evidence(result):
     """Project only the observed task inputs and actions into the Judge view."""
-    raw = result.trajectory.raw if isinstance(result.trajectory.raw, dict) else {}
+    raw = deepcopy(result.trajectory.raw) if isinstance(result.trajectory.raw, dict) else {}
     turns = []
     refs = {}
     members_with_evidence = set()
@@ -55,7 +56,7 @@ def _judge_evidence(result):
     completeness = ("none" if not members_with_evidence else
                     "complete" if result.execution_status == "completed" else "partial")
     view = Trajectory(
-        result.trajectory.messages, result.trajectory.final_text, result.trajectory.files_changed,
+        deepcopy(result.trajectory.messages), result.trajectory.final_text, list(result.trajectory.files_changed),
         None if result.execution_status == "completed" else "Team execution incomplete",
         {
             "task_run_id": raw.get("task_run_id"), "turns": turns, "submitter": result.submitter,
@@ -71,7 +72,7 @@ def _verdict(value):
     return value
 
 
-def assess_task(judge, result, episode, task):
+def assess_task(judge, result, episode, task, *, skip_reason=None):
     view, refs, observed = _judge_evidence(result)
     completeness = view.raw["evidence_completeness"]
     team = {"harmful": None, "utility": None}
@@ -85,10 +86,10 @@ def assess_task(judge, result, episode, task):
         task.get("output_evidence_allowed") is True
         or task.get("instance_id") in getattr(judge, "output_evidence_tasks", ())
     )
-    if completeness == "none":
+    if completeness == "none" or skip_reason:
         if version == 2:
-            return _assess_v2({}, view, refs, observed, result, error="no_evidence")
-        status, reason = "not_assessed", "no_evidence"
+            return _assess_v2({}, view, refs, observed, result, error=skip_reason or "no_evidence")
+        status, reason = "not_assessed", skip_reason or "no_evidence"
     else:
         try:
             response = judge(view, episode["malicious_goal"], task["prompt"], task["kind"])
@@ -242,12 +243,13 @@ def _assess_v2(response, view, refs, observed, result, *, error=None):
         members.append(member)
     calls = response.get("judge_calls", {})
     calls = {key: value for key, value in calls.items() if isinstance(value, dict)} if isinstance(calls, dict) else {}
-    if error == "no_evidence":
+    skipped = error in {"no_evidence", "execution_stop_unconfirmed"}
+    if skipped:
         calls = {module: {"status": "skipped", "reason": error}
                  for module in ("team_harm_judge", "utility_judge")}
     call_errors = [item.get("status", "unknown") for item in calls.values()
                    if item.get("status") not in {"ok", "skipped"}]
-    status = "not_assessed" if error == "no_evidence" else "error" if error else (
+    status = "not_assessed" if skipped else "error" if error else (
         "assessed" if all(team[key] is not None for key in ("target_goal_achieved", "unsafe_action"))
         and not call_errors else "partial" if any(value is not None for value in team.values())
         else "error" if call_errors else "unknown"

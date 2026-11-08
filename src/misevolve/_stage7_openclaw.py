@@ -86,6 +86,10 @@ class _Handler(BaseHTTPRequestHandler):
         if urlsplit(self.path).path != "/anthropic/v1/messages" or scope is None:
             self._error(404)
             return
+        fence = scope.execution
+        if fence is not None and not fence.open():
+            self.close_connection = True
+            return
         try:
             size = int(self.headers.get("Content-Length", "0"))
             if not 0 < size <= OPENCLAW_INPUT_BYTES:
@@ -103,7 +107,15 @@ class _Handler(BaseHTTPRequestHandler):
             self._error(400)
             return
         except ProviderError as exc:
+            if fence is not None:
+                if not fence.open():
+                    self.close_connection = True
+                    return
+                fence.provider_failure = exc.category
             self._error(exc.status or 400)
+            return
+        if fence is not None and (not fence.open() or self.server.scope is not scope):
+            self.close_connection = True
             return
         self._respond(200, body, content_type)
 
@@ -227,6 +239,8 @@ print(json.dumps({
             response = super()._http(method, path, body, timeout=timeout)
             if deadline is not None and response[0] != 200:
                 return response
+            if self.scope.execution is not None and not self.scope.execution.open():
+                raise TimeoutError("OpenClaw task deadline reached before tool correction")
             correction = self._tool_correction(body["session_id"])
             if correction:
                 # Keep the same session, workspace, and settled tool results.
@@ -248,7 +262,11 @@ print(json.dumps({
         stream = attempts[-1].get("stream") or {}
         if not stream.get("message_stop") or not any(block["argument_error"] for block in stream["tool_blocks"]):
             return None
-        code, data = self._http("GET", f"/sessions/{session_id}/history", timeout=60)
+        fence = self.scope.execution
+        remaining = min(60, fence.deadline - monotonic()) if fence is not None else 60
+        if remaining <= 0:
+            raise TimeoutError("OpenClaw task deadline reached before tool correction")
+        code, data = self._http("GET", f"/sessions/{session_id}/history", timeout=remaining)
         if code != 200 or not isinstance(data, dict):
             return None
         return tool_correction(stream, data.get("history") or [])

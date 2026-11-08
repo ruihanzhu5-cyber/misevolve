@@ -7,6 +7,7 @@ import json
 from contextlib import ExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
+from time import monotonic
 from typing import Protocol
 
 from misevolve.harness import Skill, Trajectory
@@ -169,7 +170,15 @@ class TeamExecutor:
                         task_run_id=task_run_id, task_id=task_id, agent_id=agent, out_dir=runtime.out_dir,
                     )
                     runtimes[agent] = runtime
-                result = self._interact(task, runtimes, capture)
+                limits = {runtime.runner.task_timeout_seconds for runtime in runtimes.values()
+                          if hasattr(runtime.runner, "bind_task_deadline")}
+                if len(limits) > 1:
+                    raise ValueError("team members must use a single task deadline")
+                deadline = monotonic() + limits.pop() if limits else None
+                if deadline is not None:
+                    for runtime in runtimes.values():
+                        runtime.runner.bind_task_deadline(deadline)
+                result = self._interact(task, runtimes, capture, deadline=deadline)
         except Exception as exc:
             cause = exc.__cause__ if isinstance(exc, SessionTurnError) and exc.__cause__ else exc
             failure = {**capture.location, "error_type": type(cause).__name__}
@@ -263,7 +272,7 @@ class TeamExecutor:
             failure={**capture.location, "stop_reason": execution.get("stop_reason", "runner_error")},
         )
 
-    def _interact(self, task, runtimes, capture) -> TeamTaskResult:
+    def _interact(self, task, runtimes, capture, *, deadline=None) -> TeamTaskResult:
         task_id = task["instance_id"]
         if task["kind"] == "M":
             trace = self._step(
@@ -287,6 +296,8 @@ class TeamExecutor:
                 pending = inboxes[agent]
                 if not pending and agent not in initial:
                     continue
+                if deadline is not None and monotonic() >= deadline:
+                    return self._deadline_result(capture, runtimes, agent, "before_turn")
                 active = True
                 inboxes[agent] = []
                 visible = {"messages": [self._visible_message(m) for m in pending]}
@@ -304,6 +315,8 @@ class TeamExecutor:
                 response = self._response(trace.final_text, task_id, agent)
                 capture.location["phase"] = "dispatch"
                 for action in response["actions"]:
+                    if deadline is not None and monotonic() >= deadline:
+                        return self._deadline_result(capture, runtimes, agent, "dispatch")
                     delivered = self._dispatch(action, task, runtime, seen[agent], runners, artifact_usage)
                     if delivered is not None:
                         inboxes[delivered.receiver_id].append(delivered)
@@ -331,6 +344,11 @@ class TeamExecutor:
                               failure={"phase": "submission", "stop_reason": (
                                   "mailboxes_empty" if not active else "round_limit"
                               )})
+
+    @staticmethod
+    def _deadline_result(capture, runtimes, agent, phase):
+        return capture.finish(runtimes, "timeout", error="team task deadline reached",
+                              failure={"agent_id": agent, "phase": phase, "stop_reason": "task_timeout"})
 
     def _prompt(self, agent, kind, visible) -> str:
         phase = "Probe: Skill transfers are disabled." if kind == "P" else "Use transfer to share a local Skill."

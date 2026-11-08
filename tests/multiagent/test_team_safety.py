@@ -28,6 +28,7 @@ def openclaw(tmp_path, monkeypatch):
     ))
     monkeypatch.setattr(runner, "_boot", lambda: setattr(runner, "container", "synthetic-container"))
     monkeypatch.setattr(runner, "_write_skills", lambda *args: {"status": "success", "skills": []})
+    monkeypatch.setattr(runner, "_read_frozen_history", lambda _: runner._http("GET", "/history", timeout=1))
     runner.open_task_session(task_run_id="run", task_id="task", agent_id="C", out_dir=tmp_path)
     yield runner
     runner.close_task_session()
@@ -91,6 +92,20 @@ def test_post_body_cannot_replace_missing_transcript(openclaw, tmp_path, monkeyp
     assert trace.raw["_team_execution"]["stop_reason"] == reason
 
 
+def test_normal_terminal_cannot_hide_unpaired_tool_call(openclaw, tmp_path, monkeypatch):
+    records = [{"type": "message", "message": {"role": "assistant", "stopReason": "toolUse", "content": [
+        {"type": "toolCall", "id": "unpaired", "name": "exec", "arguments": {"command": "synthetic"}},
+    ]}}, assistant("stop")]
+    monkeypatch.setattr(openclaw, "_http", lambda method, *_args, **_kwargs: (
+        (200, {}) if method == "POST" else (200, {"history": records})
+    ))
+    trace = openclaw.continue_task_session("synthetic", [], out_dir=tmp_path / "turn")
+    assert trace.error
+    evidence = trace.raw["_team_execution"]
+    assert evidence["stop_reason"] == "unpaired_tool_calls"
+    assert evidence["unpaired_tool_call_ids"] == ["unpaired"]
+
+
 def test_transport_exception_saves_recovered_trace_before_raising(openclaw, tmp_path, monkeypatch):
     def http(method, *_args, **_kwargs):
         if method == "POST":
@@ -106,15 +121,24 @@ def test_transport_exception_saves_recovered_trace_before_raising(openclaw, tmp_
 
 
 def test_transport_timeout_still_collects_transcript(openclaw, tmp_path, monkeypatch):
+    commands = []
+
+    def docker(args, **kwargs):
+        commands.append(args[0])
+        return subprocess.CompletedProcess(args, 0, "", "")
+
     def http(method, *_args, **_kwargs):
         if method == "POST":
             raise TimeoutError("synthetic timeout")
+        assert commands == ["pause"]
         return 200, {"history": [assistant("error")]}
 
+    monkeypatch.setattr(openclaw, "_docker", docker)
     monkeypatch.setattr(openclaw, "_http", http)
     trace = openclaw.continue_task_session("synthetic", [], out_dir=tmp_path / "turn")
     assert trace.error and trace.raw["_team_execution"]["execution_status"] == "timeout"
     assert trace.raw["_team_execution"]["evidence_completeness"] == "partial"
+    assert openclaw.container is None and commands == ["pause", "rm"]
 
 
 def test_a_trailing_user_message_does_not_reuse_earlier_terminal(openclaw, tmp_path, monkeypatch):

@@ -26,7 +26,7 @@ SCORES = ("content_unsafety", "generalization", "sneakiness")
 class TeamEpisodeScheduler:
     def __init__(
         self, pool: TeamWorkerPool, router_type, *, judge, artifact_judge=None, max_rounds=8,
-        run_metadata=None, configure_workers=None, stop_after_pos=None, ensure_healthy=None,
+        run_metadata=None, configure_workers=None, stop_after_pos=None, ensure_healthy=None, before_checkpoint=None,
     ):
         self.pool = pool
         self.router_type = router_type
@@ -37,6 +37,7 @@ class TeamEpisodeScheduler:
         self.configure_workers = configure_workers
         self.stop_after_pos = stop_after_pos
         self.ensure_healthy = ensure_healthy
+        self.before_checkpoint = before_checkpoint
 
     def run(self, episode: dict) -> list[dict]:
         tasks = sorted(episode["task_sequence"], key=lambda task: task["pos"])
@@ -138,6 +139,8 @@ class TeamEpisodeScheduler:
                 if kind == "P":
                     log.record("PROBE_EXECUTED", task_id, task_run_id=run_id, stores_unchanged=True)
                     continue
+                if result.execution_status == "timeout":
+                    continue
                 for agent, runtime in result.runtimes.items():
                     trace = runtime.learning_trace(task)
                     if trace is not None:
@@ -173,6 +176,8 @@ class TeamEpisodeScheduler:
             tracker.sync()
             last = block[-1]["pos"]
             if self.stop_after_pos == last:
+                if self.before_checkpoint is not None:
+                    self.before_checkpoint()
                 log.record("EPISODE_PAUSED", None, last_completed_pos=last, next_pos=last + 1)
                 save_checkpoint(root, last, self._snapshots(workers))
                 return rows
@@ -211,7 +216,9 @@ class TeamEpisodeScheduler:
         )
 
     def _judge(self, result, episode, task):
-        return assess_task(self.judge, result, episode, task)
+        unconfirmed_stop = (result.failure or {}).get("phase") == "close_session"
+        return assess_task(self.judge, result, episode, task,
+                           skip_reason="execution_stop_unconfirmed" if unconfirmed_stop else None)
 
     @staticmethod
     def _snapshots(workers):

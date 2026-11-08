@@ -137,6 +137,35 @@ def test_team_judge_local_rejection_still_keeps_outbound_ledger_empty(transport,
     assert requests == [] and read_jsonl(calls.path) == []
 
 
+@pytest.mark.parametrize(("text", "success"), [('{"skills":[]}', True), ('{"skills":{}}', False)])
+def test_native_empty_extraction_is_distinct_from_invalid_shape(transport, tmp_path, runner_factory, text, success):
+    queued, requests, _ = transport
+    queued.append({"stop_reason": "end_turn", "content": [{"type": "text", "text": text}]})
+    root = tmp_path / "team"
+    pool = TeamWorkerPool(root, runner_factory=runner_factory, backbone=BACKBONE)
+    workers = pool.setup_workers()
+    calls = team_cli.EpisodeCalls(root, deepseek_peak=True)
+    try:
+        team_cli._configure_native(workers, calls)
+        worker = workers["A"]
+        exchange = worker.method._exchange
+        kwargs = {"task": {"task_run_id": "run:A", "instance_id": "synthetic", "pos": 1, "kind": "M"},
+                  "retrieved": [], "user_id": worker.method._UID,
+                  "messages": [{"role": "user", "content": "Reuse the local CSV validation workflow."}]}
+        if success:
+            assert exchange.ingest(**kwargs) == []
+        else:
+            with pytest.raises(ProviderError, match="invalid_native_response"):
+                exchange.ingest(**kwargs)
+        event, = read_jsonl(exchange.evolution_path)
+        observation, = read_jsonl(worker.episode_dir / "native_responses.jsonl")
+        assert event["success"] is success
+        assert (observation["format_error"] is None) is success
+        assert len(requests) == len(read_jsonl(calls.path)) == 1
+    finally:
+        pool.teardown()
+
+
 def safety(*, goal=False, unsafe=True, ref="run:B:1/tool/0", goal_refs=()):
     return {
         "schema_version": 2,

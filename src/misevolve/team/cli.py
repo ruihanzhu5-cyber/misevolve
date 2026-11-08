@@ -8,6 +8,7 @@ import subprocess
 import uuid
 from collections import Counter
 from pathlib import Path
+from threading import Condition
 
 from misevolve._stage7_api import DEEPSEEK_MODEL, ProviderCalls, ProviderError, Scope
 from misevolve._stage7_openclaw import BACKBONE
@@ -20,7 +21,15 @@ from .checkpoint import BOUNDARIES, exclusive
 from .episode import TeamEpisodeScheduler
 from .executor import TeamWorkerPool
 from .judge import TeamJudge, evaluation_configuration
-from .openclaw import isolated_openclaw_factory
+from .openclaw import (
+    FREEZE_SECONDS,
+    REMOVE_SECONDS,
+    SNAPSHOT_SECONDS,
+    TASK_TIMEOUT,
+    TOOL_TIMEOUT_SECONDS,
+    TOOL_YIELD_MS,
+    isolated_openclaw_factory,
+)
 from .router import ChainRouter, HierarchicalRouter, PeerToPeerRouter
 
 ROUTERS = {cls.protocol: cls for cls in (ChainRouter, HierarchicalRouter, PeerToPeerRouter)}
@@ -30,7 +39,11 @@ NATIVE_MODULES = frozenset({"extractor", "maintainer"})
 class EpisodeCalls(ProviderCalls):
     """Stop further requests after an exhausted provider/transport failure."""
 
-    failure = None
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.failure = None
+        self._executor_condition = Condition()
+        self._executor_calls = 0
 
     def input_limit(self, module):
         return None if module in NATIVE_MODULES else super().input_limit(module)
@@ -47,6 +60,9 @@ class EpisodeCalls(ProviderCalls):
 
     def request(self, scope, module, payload, *, correction=None):
         self.ensure_healthy()
+        if module == "openclaw":
+            with self._executor_condition:
+                self._executor_calls += 1
         try:
             return super().request(scope, module, payload, correction=correction)
         except ProviderError as exc:
@@ -56,23 +72,76 @@ class EpisodeCalls(ProviderCalls):
                     "instance_id": scope.instance_id, "module": module, "reason": exc.category,
                     "sent_to_provider": False, **exc.details,
                 })
-            if exc.category in {"timeout", "transport_error", "http_error", "invalid_response"}:
+            if exc.category in {"timeout", "transport_error", "http_error", "invalid_response"} and not (
+                module == "openclaw" and exc.category == "timeout"
+            ):
                 self.stop(module, exc)
             raise
+        finally:
+            if module == "openclaw":
+                with self._executor_condition:
+                    self._executor_calls -= 1
+                    self._executor_condition.notify_all()
+
+    def drain_executor(self):
+        with self._executor_condition:
+            if not self._executor_condition.wait_for(lambda: not self._executor_calls, timeout=100):
+                raise RuntimeError("in-flight model accounting did not settle; no resumable checkpoint written")
 
 
 def _configure_native(workers, calls):
-    def configure_ingest(worker, task):
-        calls.ensure_healthy()
-        scope = Scope(task["task_run_id"], worker.worker_id, task.get("instance_id"))
-        _trace_native(worker, calls, scope, worker.episode_dir / "native_responses.jsonl", on_error=calls.stop)
-
     for worker in workers.values():
         exchange = worker.method._exchange
-        exchange.before_ingest = lambda task, worker=worker: configure_ingest(worker, task)
-        # The pinned SDK may catch provider exceptions and return an empty list.
-        # Keep the actual result and snapshot, but do not mark that ingest successful.
-        exchange.after_ingest = calls.ensure_healthy
+        checks = {}
+
+        def configure_ingest(task, worker=worker, checks=checks):
+            calls.ensure_healthy()
+            checks.clear()
+            scope = Scope(task["task_run_id"], worker.worker_id, task.get("instance_id"))
+
+            def observe(module, system, text):
+                error = _native_format_error(module, system, text)
+                # The native Extractor can repair a draft. Keep both attempts and check the last one.
+                if module == "extractor" or error:
+                    checks[module] = error
+                return error
+
+            _trace_native(worker, calls, scope, worker.episode_dir / "native_responses.jsonl",
+                          on_error=calls.stop, response_check=observe)
+
+        def check_ingest(checks=checks):
+            for module, error in checks.items():
+                if error:
+                    calls.stop(module, ProviderError(error, category="invalid_native_response"))
+            calls.ensure_healthy()
+
+        exchange.before_ingest = configure_ingest
+        exchange.after_ingest = check_ingest
+
+
+def _native_format_error(module, system, text):
+    from autoskill.management.extraction import _candidate_from_obj
+    from autoskill.management.maintenance import _json_from_llm_decision, _normalize_action
+    from autoskill.utils.json import json_from_llm_text
+
+    try:
+        if module == "extractor":
+            parsed = json_from_llm_text(text)
+            skills = parsed.get("skills") if isinstance(parsed, dict) else parsed
+            valid = isinstance(skills, list) and (not skills or any(
+                _candidate_from_obj(item, source=None) is not None for item in skills
+            ))
+        elif '"action"' in (system or ""):
+            parsed = _json_from_llm_decision(text)
+            valid = _normalize_action(parsed.get("action")) in {"add", "merge", "discard"}
+        else:
+            parsed = json_from_llm_text(text)
+            valid = isinstance(parsed, dict) and bool(parsed)
+            if '"same_capability"' in (system or ""):
+                valid = valid and type(parsed.get("same_capability")) is bool
+    except (ValueError, TypeError, KeyError, AttributeError):
+        valid = False
+    return None if valid else "native_output_format"
 
 
 def run_episode(args, config):
@@ -102,7 +171,15 @@ def _run_episode(args, config, root):
     cache_dir = (args.cache_dir or root.parent / "artifact_judge_cache").resolve()
     judge = TeamJudge(calls, root / "judge_results.jsonl", cache_dir, config)
     metadata = {key: config[key] for key in ("execution", "judge")}
-    metadata["execution"] = {**metadata["execution"], "native_input_limit_bytes": calls.input_limit("extractor")}
+    metadata["execution"] = {
+        **metadata["execution"], "native_input_limit_bytes": calls.input_limit("extractor"),
+        "task_timeout_seconds": TASK_TIMEOUT, "task_deadline_shared_across_members": True,
+        "tool_default_timeout_seconds": TOOL_TIMEOUT_SECONDS, "tool_yield_ms": TOOL_YIELD_MS,
+        "tool_timeout_overridable_by_native_exec": True, "process_tool_enabled": True,
+        "freeze_timeout_seconds": FREEZE_SECONDS, "snapshot_timeout_seconds": SNAPSHOT_SECONDS,
+        "remove_timeout_seconds": REMOVE_SECONDS, "total_cost_limit_cny": None,
+        "executor_task_request_limit": None, "provider_retries_per_request": 1,
+    }
     metadata.update(run_id=calls.run_id, replicate_id=args.replicate_id, code_sha=code_sha,
                     artifact_cache=str(cache_dir))
     if getattr(args, "verify_runtime", False):
@@ -114,18 +191,23 @@ def _run_episode(args, config, root):
                       if row.get("status") in {"invalid_schema", "truncated", "incomplete_response"})
         if any(count >= 2 for count in bad.values()):
             raise RuntimeError("repeat Judge response format failure; episode stopped")
+        if (root / "all_rows.json").exists():
+            rows = json.loads((root / "all_rows.json").read_text(encoding="utf-8"))
+            if sum((row.get("failure") or {}).get("stop_reason") == "model_request_timeout" for row in rows) >= 2:
+                raise RuntimeError("repeat executor provider timeout; episode stopped")
 
-    with isolated_openclaw_factory(calls) as factory:
-        pool = TeamWorkerPool(root, runner_factory=factory, backbone=args.backbone, resume=resume)
-        try:
+    try:
+        with isolated_openclaw_factory(calls) as factory:
+            pool = TeamWorkerPool(root, runner_factory=factory, backbone=args.backbone, resume=resume)
             return TeamEpisodeScheduler(
                 pool, ROUTERS[args.protocol], judge=judge, artifact_judge=judge.artifact,
                 configure_workers=lambda workers: _configure_native(workers, calls), run_metadata=metadata,
                 stop_after_pos=getattr(args, "stop_after_pos", None), ensure_healthy=ensure_healthy,
+                before_checkpoint=calls.drain_executor,
             ).run(episode)
-        finally:
-            if calls.path.exists():
-                atomic_json(root / "api_summary.json", calls.summary())
+    finally:
+        if calls.path.exists():
+            atomic_json(root / "api_summary.json", calls.summary())
 
 
 def main():

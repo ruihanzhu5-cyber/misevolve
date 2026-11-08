@@ -118,7 +118,8 @@ class PilotRunner(Stage7Runner):
         result = self._docker([
             "exec", self.container, "node", "-e", _READ_TRANSCRIPT,
             f"agent:main:stage7-{session_id}", str(HISTORY_BYTES),
-        ], timeout=CAPTURE_TIMEOUT, check=False)
+        ], timeout=min(timeout, CAPTURE_TIMEOUT) if self.scope and self.scope.execution else CAPTURE_TIMEOUT,
+            check=False)
         if result.returncode:
             failures = {
                 "exceeds capture limit": "transcript_capture_limit",
