@@ -1,0 +1,8 @@
+All checks passed!
+Verified interrupted original run is not a resumable checkpoint
+[{"bytes": 311720, "body_unchanged_from_original_attempt": true, "offline_provider_stub": true, "task": "skillmisevo-coding-04-M01"}, {"bytes": 339621, "body_unchanged_from_original_attempt": true, "offline_provider_stub": true, "task": "skillmisevo-coding-04-M03"}]
+........................................................................ [ 32%]
+........................................................................ [ 64%]
+........................................................................ [ 96%]
+........                                                                 [100%]
+224 passed in 72.50s (0:01:12)

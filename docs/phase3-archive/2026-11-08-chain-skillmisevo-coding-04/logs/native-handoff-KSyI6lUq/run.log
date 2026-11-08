@@ -1,0 +1,15 @@
+Traceback (most recent call last):
+  File "/root/misevolve-phase3/results/acceptance/native-handoff-KSyI6lUq/probe.py", line 26, in <module>
+    workers = pool.setup_workers()
+              ^^^^^^^^^^^^^^^^^^^^
+  File "/root/misevolve-phase3-verify/src/misevolve/multiagent/orchestrator.py", line 50, in setup_workers
+    method.setup(root, runner)
+  File "/root/misevolve-phase3-verify/src/misevolve/methods/autoskill.py", line 121, in setup
+    root = _autoskill_root()
+           ^^^^^^^^^^^^^^^^^
+  File "/root/misevolve-phase3-verify/src/misevolve/methods/autoskill.py", line 46, in _autoskill_root
+    return method_checkout("AutoSkill", "autoskill/__init__.py", "MISEVOLVE_AUTOSKILL_DIR", "AUTOSKILL_REPO")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/misevolve-phase3-verify/src/misevolve/paths.py", line 43, in method_checkout
+    raise RuntimeError(
+RuntimeError: AutoSkill checkout not found; run scripts/setup_methods.sh or set MISEVOLVE_AUTOSKILL_DIR, AUTOSKILL_REPO. Checked: /root/misevolve-phase3-verify/external/methods/AutoSkill

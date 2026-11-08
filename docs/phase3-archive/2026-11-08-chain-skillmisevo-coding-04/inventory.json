@@ -1,0 +1,819 @@
+{
+  "experiment": "Phase 3 Chain Live Acceptance (skillmisevo-coding-04)",
+  "date_asia_shanghai": "2026-11-08",
+  "source": "/root/misevolve-phase3/results/acceptance",
+  "source_runs": [
+    "live-preflight-uNGEfKex",
+    "native-handoff-6mImE8Oi",
+    "native-handoff-eVLV40Gk",
+    "native-handoff-KSyI6lUq",
+    "chain-MwkcUmNJ"
+  ],
+  "note": "Logs retain native paths and bytes except credential value replacement. Known synthetic placeholders are retained.",
+  "files": [
+    {
+      "path": "logs/chain-MwkcUmNJ/continuation.log",
+      "bytes": 46,
+      "sha256": "01ce7508f03ba2c8c32fc2f81455da74d4fc798a7d11328c463b5ecb9b1125cf",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/chain-MwkcUmNJ/continue.sh",
+      "bytes": 803,
+      "sha256": "45c17eb7b42f0eb8aae14977f771deb3aa86697efc93f2624bacec555696ff76",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/chain-MwkcUmNJ/episode/all_rows.json",
+      "bytes": 9040,
+      "sha256": "a68761008167274ce4fb926efa69a456f18667f293e1c827bfb33ec1c52c629b",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/chain-MwkcUmNJ/episode/api_summary.json",
+      "bytes": 642,
+      "sha256": "84271a25fb17d5f955a8bf8145143537a4f99c960d0921cb1763f602112052c8",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/chain-MwkcUmNJ/episode/behavior_summary.json",
+      "bytes": 1964,
+      "sha256": "a982ded9b556de539d9079eeebd0dc0ca91d05e67a7692a6f15e55746f3b3f94",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/chain-MwkcUmNJ/episode/judge_results.jsonl",
+      "bytes": 5504,
+      "sha256": "8686ede14122b64186615c8b5756f522562ce7fecc4a830c01e51e0d5d34b0cb",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/chain-MwkcUmNJ/episode/model_calls.jsonl",
+      "bytes": 99911,
+      "sha256": "289c173f87128cfa4402ad37d437a156f0c533ee65036dbfc86c977a5419e3df",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/chain-MwkcUmNJ/episode/progress.json",
+      "bytes": 68,
+      "sha256": "d86af98a4cf1012311f2fe83bc1a6dd1b4c6b668817cfea4a68e47923a739345",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/chain-MwkcUmNJ/episode/provenance/provenance_events.jsonl",
+      "bytes": 13520,
+      "sha256": "23942401fc0a36203f6e2e221ce4801dde2c42a996f01312bc9f8b45c19d3f70",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/chain-MwkcUmNJ/episode/tasks/01-067283bec5fa49f69114b82377673201/A/turn-01/session_raw.jsonl",
+      "bytes": 316552,
+      "sha256": "bb9bb47d8a6267880f0a21b716968e25264a493675c5c9e144f4bfad343635c2",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/chain-MwkcUmNJ/episode/tasks/01-067283bec5fa49f69114b82377673201/A/turn-01/trajectory_raw.json",
+      "bytes": 486659,
+      "sha256": "7663123baa11fe7e992bf0e2b48ed69509d2a9b1045002834db7ce7ad50e6ff6",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/chain-MwkcUmNJ/episode/tasks/01-067283bec5fa49f69114b82377673201/team_trajectory.json",
+      "bytes": 765597,
+      "sha256": "b9d551fc2f2703cd34086e326f3ebea19de40d4eb44ca63b2ede8e8162b661e6",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/chain-MwkcUmNJ/episode/tasks/02-0fb00ba41d9f46cb9f44b7c80ed79762/A/turn-01/session_raw.jsonl",
+      "bytes": 227323,
+      "sha256": "98f3ec9c29d8f90d446c5312628329bc2115e7ed9ccd8ae6d84b5741bd4b9866",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/chain-MwkcUmNJ/episode/tasks/02-0fb00ba41d9f46cb9f44b7c80ed79762/A/turn-01/trajectory_raw.json",
+      "bytes": 358625,
+      "sha256": "73eb779073ef905b0850d7feb8c3875d10cd0a35268a7c3a0038a7cef821921b",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/chain-MwkcUmNJ/episode/tasks/02-0fb00ba41d9f46cb9f44b7c80ed79762/team_trajectory.json",
+      "bytes": 590055,
+      "sha256": "9a44dd4002164f1fcccf31c6af927523a1c202007a7e2d57ab779225637b03c8",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/chain-MwkcUmNJ/episode/tasks/03-37e874d5104149d8a9950e570ca48acf/A/turn-01/session_raw.jsonl",
+      "bytes": 217600,
+      "sha256": "356f277dd7fff95bf998a730f562c0a1cd0c3adfef0e95d4c5c00604ee258652",
+      "credential_replacements": 3
+    },
+    {
+      "path": "logs/chain-MwkcUmNJ/episode/tasks/03-37e874d5104149d8a9950e570ca48acf/A/turn-01/trajectory_raw.json",
+      "bytes": 362911,
+      "sha256": "136c9f0c459ff724029bb11aaf77a32e19179599e3a91cdd7053e8127d79f077",
+      "credential_replacements": 6
+    },
+    {
+      "path": "logs/chain-MwkcUmNJ/episode/tasks/03-37e874d5104149d8a9950e570ca48acf/team_trajectory.json",
+      "bytes": 613988,
+      "sha256": "d771fe24de2ec41ad87ad1473227f6261711590a1bb86728935d795465c06b5f",
+      "credential_replacements": 10
+    },
+    {
+      "path": "logs/chain-MwkcUmNJ/episode/team_events.jsonl",
+      "bytes": 79501,
+      "sha256": "ca34b0c5322bee89ca5be015515628b3ab88d66714678a288bb02c0f6f41ad19",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/chain-MwkcUmNJ/episode/team_manifest.json",
+      "bytes": 3413,
+      "sha256": "c8c077a60b0a6836e861b3399becd1c5769a6fc76eb0d74592d40c640bcc2460",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/chain-MwkcUmNJ/episode/workers/A/evolution_events.jsonl",
+      "bytes": 636,
+      "sha256": "5f031bd751a9c1124924d22967d79683cd4f3fe3e4de3cb899fa68963a5a0dea",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/chain-MwkcUmNJ/episode/workers/A/exchange_state.json",
+      "bytes": 87,
+      "sha256": "28655058bbd3fd7a123b023a9245618b18d165e3b399c0a3491b42be210e2339",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/chain-MwkcUmNJ/episode/workers/A/task_events.jsonl",
+      "bytes": 3058,
+      "sha256": "dc2a7346c37531a5d6921f49e221e919316fe51070064a13fbfc72725dd1591a",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/chain-MwkcUmNJ/episode/workers/A/worker_state.json",
+      "bytes": 88,
+      "sha256": "4c5e9583fdf2f6d26e3e18f46d32e12f40b4ede587f98acff0f2c6d7b95fe744",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/chain-MwkcUmNJ/episode/workers/B/worker_state.json",
+      "bytes": 88,
+      "sha256": "d6f19e0fe64d68e2a783f779b729f213e5ffa7784b2f4dd136cf1671a9721414",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/chain-MwkcUmNJ/episode/workers/C/worker_state.json",
+      "bytes": 88,
+      "sha256": "979d5d70b62e03c7429a7b8bb080dc052e7459682c55a9b52533475c53e1d761",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/chain-MwkcUmNJ/first.log",
+      "bytes": 4950,
+      "sha256": "d8461df29acd9b06a214d73cc82c25c442cf534aeeac323784dd7a1477c68a45",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/chain-MwkcUmNJ/fix-verification.log",
+      "bytes": 701,
+      "sha256": "e53c892f7e7140677dfdb379c86e2db7e07b942a68752e989be501e684bfb23b",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/chain-MwkcUmNJ/fixed_replay.py",
+      "bytes": 3441,
+      "sha256": "b0a3acad94e0c922e8dc87b570e2933fbdef57adeef510eb0f22a438f3d90803",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/chain-MwkcUmNJ/launch.sh",
+      "bytes": 1454,
+      "sha256": "bb8d5f0b77b2e072f2f404785194c3486411d31855372a061530a94887cb2f23",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/chain-MwkcUmNJ/offline_fixed_replay.json",
+      "bytes": 314,
+      "sha256": "d94da5c39c152ca835f6f65b15c942f979d0fa3204c3b0d10f1beae6ae6099b4",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/chain-MwkcUmNJ/offline_fixed_replay/model_calls.jsonl",
+      "bytes": 1726,
+      "sha256": "5d0d49e1a486259777c3fa0163131e6a1aa9188fe30c91eb7042bff43d97b0bf",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/chain-MwkcUmNJ/offline_fixed_replay/workers/A/evolution_events.jsonl",
+      "bytes": 720,
+      "sha256": "0166810dae8723e73efc984b7e5170feb4104b7ba3b6e46ec84ce43a7a218735",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/chain-MwkcUmNJ/offline_fixed_replay/workers/A/exchange_state.json",
+      "bytes": 87,
+      "sha256": "28655058bbd3fd7a123b023a9245618b18d165e3b399c0a3491b42be210e2339",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/chain-MwkcUmNJ/offline_fixed_replay/workers/A/native_responses.jsonl",
+      "bytes": 248,
+      "sha256": "671ad65a359157881adb4665b08154b7687f55426444f6e5477d03631b9beaba",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/chain-MwkcUmNJ/offline_fixed_replay/workers/A/worker_state.json",
+      "bytes": 88,
+      "sha256": "4c5e9583fdf2f6d26e3e18f46d32e12f40b4ede587f98acff0f2c6d7b95fe744",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/chain-MwkcUmNJ/offline_fixed_replay/workers/B/worker_state.json",
+      "bytes": 88,
+      "sha256": "d6f19e0fe64d68e2a783f779b729f213e5ffa7784b2f4dd136cf1671a9721414",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/chain-MwkcUmNJ/offline_fixed_replay/workers/C/worker_state.json",
+      "bytes": 88,
+      "sha256": "979d5d70b62e03c7429a7b8bb080dc052e7459682c55a9b52533475c53e1d761",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/chain-MwkcUmNJ/offline_native_replay.json",
+      "bytes": 414,
+      "sha256": "1f0fb13fc717b8d154e0b1abbc56f373f277724c8225a6830a36bd988ef94ac5",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/chain-MwkcUmNJ/offline_native_replay/workers/A/evolution_events.jsonl",
+      "bytes": 636,
+      "sha256": "d0797e624e34501347d489904ee66970daf936b72f90f462deeed9d3756f6773",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/chain-MwkcUmNJ/offline_native_replay/workers/A/exchange_state.json",
+      "bytes": 87,
+      "sha256": "28655058bbd3fd7a123b023a9245618b18d165e3b399c0a3491b42be210e2339",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/chain-MwkcUmNJ/offline_native_replay/workers/A/worker_state.json",
+      "bytes": 88,
+      "sha256": "4c5e9583fdf2f6d26e3e18f46d32e12f40b4ede587f98acff0f2c6d7b95fe744",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/chain-MwkcUmNJ/offline_native_replay/workers/B/worker_state.json",
+      "bytes": 88,
+      "sha256": "d6f19e0fe64d68e2a783f779b729f213e5ffa7784b2f4dd136cf1671a9721414",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/chain-MwkcUmNJ/offline_native_replay/workers/C/worker_state.json",
+      "bytes": 88,
+      "sha256": "979d5d70b62e03c7429a7b8bb080dc052e7459682c55a9b52533475c53e1d761",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/chain-MwkcUmNJ/replay_native.py",
+      "bytes": 2503,
+      "sha256": "d8d678a0b2f7c8ef1c0ba8137e7a28971303c7ca54d4b1b4d23b6343c137a91e",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/chain-MwkcUmNJ/stage_status",
+      "bytes": 22,
+      "sha256": "6c7460a3da2afd629b20a8e851c0a34e7956057cc5e81a14fa3ba56fd800a84e",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/chain-MwkcUmNJ/verify.py",
+      "bytes": 9777,
+      "sha256": "73094863e32b3206281309db8f5df7904c513890359d766ad68c9df6e055757d",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/live-preflight-uNGEfKex/assessment.json",
+      "bytes": 2811,
+      "sha256": "6be32fbe1029b734cfc32c268501713cb45da02472503d3c9a291e072b1e4cbf",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/live-preflight-uNGEfKex/judge_evidence.json",
+      "bytes": 3443,
+      "sha256": "37bf9e5ff38fd1d6b10145d087bb10acab0c4332edcf002e50415d1ccc93da69",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/live-preflight-uNGEfKex/judge_results.jsonl",
+      "bytes": 2224,
+      "sha256": "36916540538584b75c84fbcea1b40b6401663bde3f819cbb8325b9ded066eed6",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/live-preflight-uNGEfKex/model_calls.jsonl",
+      "bytes": 5773,
+      "sha256": "80619724839bf5f10cce4b01a6c93e1082b7d7ca2869c5ded8bd2babe3ada49f",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/live-preflight-uNGEfKex/preflight.py",
+      "bytes": 5870,
+      "sha256": "d4d9681f9ecd02845915f25dc6df2a27af8fb42d0728df2c9089e0958b321472",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/live-preflight-uNGEfKex/progress.json",
+      "bytes": 22,
+      "sha256": "b2bbcc122dcd6c3745acbf7febc07cfde56738c7a31916db851a25640c90d25d",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/live-preflight-uNGEfKex/run.log",
+      "bytes": 2052,
+      "sha256": "4cd63c9339c85615de8386c231f4ff466a82945a0e73e12e0a13b384114203d1",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/live-preflight-uNGEfKex/summary.json",
+      "bytes": 1856,
+      "sha256": "fc78ca547f6c20a84fab98f0ea9f15387752f1b44688ac99d15c87d73c119724",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/live-preflight-uNGEfKex/turn-01/session_raw.jsonl",
+      "bytes": 10985,
+      "sha256": "a2b3101190b57bfd060ed9f71a6a51cc18e1f2bdad63e39290524744aa388e8e",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/live-preflight-uNGEfKex/turn-01/trajectory_raw.json",
+      "bytes": 12207,
+      "sha256": "fca03e988aa14e9e13d3df32c4084181f709aa434945bf6e248a77e3bf160e16",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/live-preflight-uNGEfKex/turn-02/session_raw.jsonl",
+      "bytes": 14636,
+      "sha256": "31163858242cec42c12b98ed1f656ebbf02c47f40771b0e835b6ff52c1ac225f",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/live-preflight-uNGEfKex/turn-02/trajectory_raw.json",
+      "bytes": 4844,
+      "sha256": "870b0fc425c7d6d34f8e52f6d84a66b6a387aac975a26a1eb6ce378959362ac1",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/binary_events.jsonl",
+      "bytes": 7178,
+      "sha256": "3da4bef64e14141018b226257838e6b9dadb7cc3cbda767b9a6fbcb3a46228bd",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/binary_result.json",
+      "bytes": 275,
+      "sha256": "e8ed3c7c9a7ceedc3850d9b2c17aacb9a3416c2292af2beb0f405e062afc9263",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/launch.sh",
+      "bytes": 471,
+      "sha256": "a5723b1139ae8eeb8d777531a9d0d8664442fe5ca8e5dbd82327e22136535d0d",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/native/registry/artifacts/252efd95e37a39fc8decd6ed933986949be8d19a7a742ba4326eee4a94aebd7f/SKILL.md",
+      "bytes": 246,
+      "sha256": "187dc45b95c9dc866799778f43daddf9c4c49f11d8f88125757301910b4fa6b2",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/native/registry/artifacts/252efd95e37a39fc8decd6ed933986949be8d19a7a742ba4326eee4a94aebd7f/metadata.json",
+      "bytes": 1540,
+      "sha256": "473b37323e81697968ebabc5e872c873a2332d762ff431e5c2fb49cd79511492",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/native/registry/registry.jsonl",
+      "bytes": 228,
+      "sha256": "4cf18531e5fe9669f8b49d0f7373770965ddca4bf188f4f709b99ebbf503b80c",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/native/registry/transfer_events.jsonl",
+      "bytes": 3262,
+      "sha256": "4c0da49006e02a7bc63aa88fc1f5bb46d3378c47a30761488f2517b16fd7cefd",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/native/team_events.jsonl",
+      "bytes": 15888,
+      "sha256": "d6f97262fee9d1e8d718c62207a5ce7c788f0af0dc536984dad4134fd46bab8c",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/native/workers/A/autoskill_store/Users/skillmisevo/synthetic-arithmetic/SKILL.md",
+      "bytes": 246,
+      "sha256": "187dc45b95c9dc866799778f43daddf9c4c49f11d8f88125757301910b4fa6b2",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/native/workers/A/autoskill_store/index/skill_usage_stats.json",
+      "bytes": 405,
+      "sha256": "fb7a1aa2abbee907697a1b4299eadefa2ea5407a77c95ac1e5dff5d997945026",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/native/workers/A/autoskill_store/index/skills-bm25.doc_hash.json",
+      "bytes": 69,
+      "sha256": "014e9cb7c1869ecbe6fb401700150701efb354e6ed2669965d50b6a37e1f3896",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/native/workers/A/autoskill_store/index/skills-bm25.doc_len.json",
+      "bytes": 29,
+      "sha256": "df52e568456d91a835a42ceb2995b864594621dd3e7852ee31c2bcc807e3ae78",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/native/workers/A/autoskill_store/index/skills-bm25.doc_tf.json",
+      "bytes": 196,
+      "sha256": "f566b66eafb6705e17e94b58235285f79584dd22c731f1c285e37189be295003",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/native/workers/A/autoskill_store/index/skills-bm25.meta.json",
+      "bytes": 65,
+      "sha256": "5fd873aeeeed45b03fcc146b0aff730afc02c12c73dd30293a7f79a4b2c5a99d",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/native/workers/A/autoskill_store/index/skills-bm25.postings.json",
+      "bytes": 547,
+      "sha256": "4b52377071b7f24b9a4239ee936170238cae40030db08faa8d930fd01abdadfb",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/native/workers/A/autoskill_store/vectors/skills-hashing-default-d256-8c95e52120.doc_hash.json",
+      "bytes": 69,
+      "sha256": "014e9cb7c1869ecbe6fb401700150701efb354e6ed2669965d50b6a37e1f3896",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/native/workers/A/autoskill_store/vectors/skills-hashing-default-d256-8c95e52120.ids.txt",
+      "bytes": 23,
+      "sha256": "7b0a540ea2d60b885584ae1b2719cad8970adb9e7143a7b8d20760c981c11b10",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/native/workers/A/autoskill_store/vectors/skills-hashing-default-d256-8c95e52120.meta.json",
+      "bytes": 59,
+      "sha256": "678ddeb2efd9dbd94bd2c45df36a994c892381cf37c527182173e550c8ad1f55",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/native/workers/A/autoskill_store/vectors/skills-hashing-default-d256-8c95e52120.vecs.f32",
+      "bytes": 1024,
+      "sha256": "cf699d96df2446dffa189745ac1f632ed40bd7b0917f9477205041ba7925591f",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/native/workers/A/worker_state.json",
+      "bytes": 88,
+      "sha256": "4c5e9583fdf2f6d26e3e18f46d32e12f40b4ede587f98acff0f2c6d7b95fe744",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/native/workers/B/autoskill_store/Users/skillmisevo/synthetic-arithmetic/SKILL.md",
+      "bytes": 260,
+      "sha256": "f24724ed5f30d585fa39259f424509eecf9065fa38d1c7d1da98428ed5d77f6c",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/native/workers/B/autoskill_store/index/skill_usage_stats.json",
+      "bytes": 419,
+      "sha256": "1dc98297dfd34d3291f88195927c3865ce88595da80b7268f4b6014a378a23ec",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/native/workers/B/autoskill_store/index/skills-bm25.doc_hash.json",
+      "bytes": 83,
+      "sha256": "a2ad52c4cb9a39151653d84e379f33116207a8992d1650d97c09bbc5e2f89574",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/native/workers/B/autoskill_store/index/skills-bm25.doc_len.json",
+      "bytes": 43,
+      "sha256": "900ba38abb82e8cde2cff20882ffe4269b5155d2e77137fa27402c92dd46880a",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/native/workers/B/autoskill_store/index/skills-bm25.doc_tf.json",
+      "bytes": 210,
+      "sha256": "c79c8ac81e2fc8179ef3744983b2432797cc2dfdac513a002cabb7c52d8a7343",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/native/workers/B/autoskill_store/index/skills-bm25.meta.json",
+      "bytes": 65,
+      "sha256": "5fd873aeeeed45b03fcc146b0aff730afc02c12c73dd30293a7f79a4b2c5a99d",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/native/workers/B/autoskill_store/index/skills-bm25.postings.json",
+      "bytes": 743,
+      "sha256": "ba0a3166e4da065ea1d85b4ae1167beca707dd99c496370e8c875aaad3b73818",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/native/workers/B/autoskill_store/vectors/skills-hashing-default-d256-8c95e52120.doc_hash.json",
+      "bytes": 83,
+      "sha256": "a2ad52c4cb9a39151653d84e379f33116207a8992d1650d97c09bbc5e2f89574",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/native/workers/B/autoskill_store/vectors/skills-hashing-default-d256-8c95e52120.ids.txt",
+      "bytes": 37,
+      "sha256": "d3a3ae05e582a917f8cc39de272b99bbf9cc8c103f2f5889b417e9171d46f684",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/native/workers/B/autoskill_store/vectors/skills-hashing-default-d256-8c95e52120.meta.json",
+      "bytes": 59,
+      "sha256": "678ddeb2efd9dbd94bd2c45df36a994c892381cf37c527182173e550c8ad1f55",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/native/workers/B/autoskill_store/vectors/skills-hashing-default-d256-8c95e52120.vecs.f32",
+      "bytes": 1024,
+      "sha256": "cf699d96df2446dffa189745ac1f632ed40bd7b0917f9477205041ba7925591f",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/native/workers/B/exchange_state.json",
+      "bytes": 1449,
+      "sha256": "f5e50ad197ee2270e1532bdceb1f84d1ee47f8e795a6948bc4b3b2fca9239b82",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/native/workers/B/worker_state.json",
+      "bytes": 298,
+      "sha256": "ba0d46e4392f2779577a5b1100297c3fc34379e2d541f5d5582b630c30f14013",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/native/workers/C/autoskill_store/Users/skillmisevo/synthetic-arithmetic/SKILL.md",
+      "bytes": 260,
+      "sha256": "f24724ed5f30d585fa39259f424509eecf9065fa38d1c7d1da98428ed5d77f6c",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/native/workers/C/autoskill_store/index/skill_usage_stats.json",
+      "bytes": 419,
+      "sha256": "c231d75d4064f0d728c0460985ec3b2726188943cac0f4b762936b7e94a96f2b",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/native/workers/C/autoskill_store/index/skills-bm25.doc_hash.json",
+      "bytes": 83,
+      "sha256": "a2ad52c4cb9a39151653d84e379f33116207a8992d1650d97c09bbc5e2f89574",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/native/workers/C/autoskill_store/index/skills-bm25.doc_len.json",
+      "bytes": 43,
+      "sha256": "900ba38abb82e8cde2cff20882ffe4269b5155d2e77137fa27402c92dd46880a",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/native/workers/C/autoskill_store/index/skills-bm25.doc_tf.json",
+      "bytes": 210,
+      "sha256": "c79c8ac81e2fc8179ef3744983b2432797cc2dfdac513a002cabb7c52d8a7343",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/native/workers/C/autoskill_store/index/skills-bm25.meta.json",
+      "bytes": 65,
+      "sha256": "5fd873aeeeed45b03fcc146b0aff730afc02c12c73dd30293a7f79a4b2c5a99d",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/native/workers/C/autoskill_store/index/skills-bm25.postings.json",
+      "bytes": 743,
+      "sha256": "ba0a3166e4da065ea1d85b4ae1167beca707dd99c496370e8c875aaad3b73818",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/native/workers/C/autoskill_store/vectors/skills-hashing-default-d256-8c95e52120.doc_hash.json",
+      "bytes": 83,
+      "sha256": "a2ad52c4cb9a39151653d84e379f33116207a8992d1650d97c09bbc5e2f89574",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/native/workers/C/autoskill_store/vectors/skills-hashing-default-d256-8c95e52120.ids.txt",
+      "bytes": 37,
+      "sha256": "d3a3ae05e582a917f8cc39de272b99bbf9cc8c103f2f5889b417e9171d46f684",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/native/workers/C/autoskill_store/vectors/skills-hashing-default-d256-8c95e52120.meta.json",
+      "bytes": 59,
+      "sha256": "678ddeb2efd9dbd94bd2c45df36a994c892381cf37c527182173e550c8ad1f55",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/native/workers/C/autoskill_store/vectors/skills-hashing-default-d256-8c95e52120.vecs.f32",
+      "bytes": 1024,
+      "sha256": "cf699d96df2446dffa189745ac1f632ed40bd7b0917f9477205041ba7925591f",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/native/workers/C/exchange_state.json",
+      "bytes": 1449,
+      "sha256": "5dde1810167a9cb5fd166a954e7c75a91aabaf6a88cde26bb1d8b97fbb522296",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/native/workers/C/worker_state.json",
+      "bytes": 298,
+      "sha256": "421a1b885660a0451be7995f3d08ade4f4a9e1914593e82b3ec0610745a505c1",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/probe.py",
+      "bytes": 5999,
+      "sha256": "1f85b68dcc7669acb1e59407d8bdc3b380f707b1fefe02d0755ab12c08f4bd05",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/run.log",
+      "bytes": 97,
+      "sha256": "d5df81191439365a8490e41fea06a37557145c1ba9c5753a42d6644148a143ea",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/status",
+      "bytes": 10,
+      "sha256": "d3be030801b90ea8057d3997d9845c7f850cc7b784450645d5ec2811cc927d7a",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-6mImE8Oi/store_result.json",
+      "bytes": 2227,
+      "sha256": "cb2140e2731bb9c0df63700547b8f247a2a30ba2666dd6f2930dfda2ed1c4898",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-KSyI6lUq/launch.sh",
+      "bytes": 390,
+      "sha256": "3145fdd5a646aead85611d2392b1d82c8afb90ff51a7783b606b038c42b2231b",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-KSyI6lUq/probe.py",
+      "bytes": 6604,
+      "sha256": "2720b2e2c54a1c34540b1c811d7bbe58992ba238b90febf72823dbad3423c8e9",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-KSyI6lUq/run.log",
+      "bytes": 1126,
+      "sha256": "c2603d21a8e72a23c2e831b34e02108fba9946c24c296f55e49d93cc7b38edbf",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-eVLV40Gk/launch.sh",
+      "bytes": 471,
+      "sha256": "a5723b1139ae8eeb8d777531a9d0d8664442fe5ca8e5dbd82327e22136535d0d",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-eVLV40Gk/native/registry/artifacts/252efd95e37a39fc8decd6ed933986949be8d19a7a742ba4326eee4a94aebd7f/SKILL.md",
+      "bytes": 246,
+      "sha256": "187dc45b95c9dc866799778f43daddf9c4c49f11d8f88125757301910b4fa6b2",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-eVLV40Gk/native/registry/artifacts/252efd95e37a39fc8decd6ed933986949be8d19a7a742ba4326eee4a94aebd7f/metadata.json",
+      "bytes": 1540,
+      "sha256": "c8f8c2feae51592e411811b7c177adeb2ccf049a05738461764894c5a5f038fc",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-eVLV40Gk/native/registry/artifacts/bc4dbf4032a948c247aebeb447f80ba15026780f8aa203d5c69f4563ede4edf2/SKILL.md",
+      "bytes": 267,
+      "sha256": "746f827215592686820a6b1bd63d1e1160915d66316827c35b713794c57dd77b",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-eVLV40Gk/native/registry/artifacts/bc4dbf4032a948c247aebeb447f80ba15026780f8aa203d5c69f4563ede4edf2/metadata.json",
+      "bytes": 1792,
+      "sha256": "678608e2c4488db690da95e94e60f011d60589a97c586c22b23eaea7f0755914",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-eVLV40Gk/native/registry/registry.jsonl",
+      "bytes": 698,
+      "sha256": "1787d73535cc30c89acc76d6e0bc4743933b40aa4ad10019f995863c292b547f",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-eVLV40Gk/native/workers/A/autoskill_store/Users/skillmisevo/synthetic-arithmetic/SKILL.md",
+      "bytes": 267,
+      "sha256": "746f827215592686820a6b1bd63d1e1160915d66316827c35b713794c57dd77b",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-eVLV40Gk/native/workers/A/autoskill_store/index/skill_usage_stats.json",
+      "bytes": 405,
+      "sha256": "d85a33fa4accad6c60cb4587c0fa1ca64c97f3a2d02de13544493378d4e5ce48",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-eVLV40Gk/native/workers/A/autoskill_store/index/skills-bm25.doc_hash.json",
+      "bytes": 69,
+      "sha256": "77478493b13b063d59effbd9fc7cdaa2b40464b80ddaf8b490ee918ba03e842e",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-eVLV40Gk/native/workers/A/autoskill_store/index/skills-bm25.doc_len.json",
+      "bytes": 29,
+      "sha256": "ec7e25202ab056b058852c774cdbab796f660a3010fc8a335797a842778386d1",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-eVLV40Gk/native/workers/A/autoskill_store/index/skills-bm25.doc_tf.json",
+      "bytes": 193,
+      "sha256": "27bac219ba4a2e7c880fa9bca44dab5785b0437185c81d4524065d127706f06a",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-eVLV40Gk/native/workers/A/autoskill_store/index/skills-bm25.meta.json",
+      "bytes": 65,
+      "sha256": "4b3770cbdb12b6f03815f3fc4c4da05584d68b4b59ce5e4a9c96629f594c5f9b",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-eVLV40Gk/native/workers/A/autoskill_store/index/skills-bm25.postings.json",
+      "bytes": 517,
+      "sha256": "dc411f04287031bb810053a07208869ef51d52902b52aac1616d3ef507f09286",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-eVLV40Gk/native/workers/A/autoskill_store/vectors/skills-hashing-default-d256-8c95e52120.doc_hash.json",
+      "bytes": 69,
+      "sha256": "77478493b13b063d59effbd9fc7cdaa2b40464b80ddaf8b490ee918ba03e842e",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-eVLV40Gk/native/workers/A/autoskill_store/vectors/skills-hashing-default-d256-8c95e52120.ids.txt",
+      "bytes": 23,
+      "sha256": "7b0a540ea2d60b885584ae1b2719cad8970adb9e7143a7b8d20760c981c11b10",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-eVLV40Gk/native/workers/A/autoskill_store/vectors/skills-hashing-default-d256-8c95e52120.meta.json",
+      "bytes": 59,
+      "sha256": "678ddeb2efd9dbd94bd2c45df36a994c892381cf37c527182173e550c8ad1f55",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-eVLV40Gk/native/workers/A/autoskill_store/vectors/skills-hashing-default-d256-8c95e52120.vecs.f32",
+      "bytes": 1024,
+      "sha256": "5bebcc04858c6f4d32d5291b131104f53f31b5df053d4330420a07ece9e79526",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-eVLV40Gk/native/workers/A/worker_state.json",
+      "bytes": 88,
+      "sha256": "4c5e9583fdf2f6d26e3e18f46d32e12f40b4ede587f98acff0f2c6d7b95fe744",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-eVLV40Gk/native/workers/B/worker_state.json",
+      "bytes": 88,
+      "sha256": "d6f19e0fe64d68e2a783f779b729f213e5ffa7784b2f4dd136cf1671a9721414",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-eVLV40Gk/native/workers/C/worker_state.json",
+      "bytes": 88,
+      "sha256": "979d5d70b62e03c7429a7b8bb080dc052e7459682c55a9b52533475c53e1d761",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-eVLV40Gk/probe.py",
+      "bytes": 6604,
+      "sha256": "2720b2e2c54a1c34540b1c811d7bbe58992ba238b90febf72823dbad3423c8e9",
+      "credential_replacements": 0
+    },
+    {
+      "path": "logs/native-handoff-eVLV40Gk/run.log",
+      "bytes": 354,
+      "sha256": "493b73e5b819e32f65b251e59b12da91bddfdcc1f35065cf66188b66de05414f",
+      "credential_replacements": 0
+    }
+  ]
+}

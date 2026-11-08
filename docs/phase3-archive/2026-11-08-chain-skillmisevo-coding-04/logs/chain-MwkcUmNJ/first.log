@@ -1,0 +1,82 @@
+All checks passed!
+........................................................................ [ 32%]
+........................................................................ [ 64%]
+........................................................................ [ 97%]
+......                                                                   [100%]
+222 passed in 72.02s (0:01:12)
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/root/misevolve-phase3-chain/src/misevolve/team/cli.py", line 156, in <module>
+    main()
+  File "/root/misevolve-phase3-chain/src/misevolve/team/cli.py", line 152, in main
+    run_episode(args, config)
+  File "/root/misevolve-phase3-chain/src/misevolve/team/cli.py", line 64, in run_episode
+    return _run_episode(args, config, root)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/misevolve-phase3-chain/src/misevolve/team/cli.py", line 105, in _run_episode
+    ).run(episode)
+      ^^^^^^^^^^^^
+  File "/root/misevolve-phase3-chain/src/misevolve/team/episode.py", line 91, in run
+    return self._run(episode, tasks, executor, registry, root, first, rows)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/misevolve-phase3-chain/src/misevolve/team/episode.py", line 119, in _run
+    result = executor.run(task, task_run_id=run_id, out_dir=out_dir)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/misevolve-phase3-chain/src/misevolve/team/executor.py", line 170, in run
+    result = self._interact(task, runtimes, capture)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/misevolve-phase3-chain/src/misevolve/team/executor.py", line 299, in _interact
+    trace = self._step(runtime, task, visible, prompt, canonical_json(visible), capture)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/misevolve-phase3-chain/src/misevolve/team/executor.py", line 218, in _step
+    trace = exchange.run_with_intent(
+            ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/misevolve-phase3-chain/src/misevolve/multiagent/exchange.py", line 161, in run_with_intent
+    trajectory = runner.run(prompt, skills, out_dir=out_dir)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/misevolve-phase3-chain/src/misevolve/team/executor.py", line 64, in run
+    self.latest_trace = self.runner.continue_task_session(prompt, skills, out_dir=out_dir)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/misevolve-phase3-chain/src/misevolve/team/openclaw.py", line 62, in continue_task_session
+    status, response = self._http(
+                       ^^^^^^^^^^^
+  File "/root/misevolve-phase3-chain/src/misevolve/stage7_pilot.py", line 109, in _http
+    return super()._http(method, path, body, timeout=timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/misevolve-phase3-chain/src/misevolve/_stage7_openclaw.py", line 227, in _http
+    response = super()._http(method, path, body, timeout=timeout)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/misevolve-phase3-chain/src/misevolve/adapters/openclaw_runner.py", line 73, in _http
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/urllib/request.py", line 215, in urlopen
+    return opener.open(url, data, timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/urllib/request.py", line 515, in open
+    response = self._open(req, data)
+               ^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/urllib/request.py", line 532, in _open
+    result = self._call_chain(self.handle_open, protocol, protocol +
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/urllib/request.py", line 492, in _call_chain
+    result = func(*args)
+             ^^^^^^^^^^^
+  File "/usr/lib/python3.12/urllib/request.py", line 1373, in http_open
+    return self.do_open(http.client.HTTPConnection, req)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/urllib/request.py", line 1348, in do_open
+    r = h.getresponse()
+        ^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/http/client.py", line 1457, in getresponse
+    response.begin()
+  File "/usr/lib/python3.12/http/client.py", line 336, in begin
+    version, status, reason = self._read_status()
+                              ^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/http/client.py", line 297, in _read_status
+    line = str(self.fp.readline(_MAXLINE + 1), "iso-8859-1")
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/socket.py", line 707, in readinto
+    return self._sock.recv_into(b)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt

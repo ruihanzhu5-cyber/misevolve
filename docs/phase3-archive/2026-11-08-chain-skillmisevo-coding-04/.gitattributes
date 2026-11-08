@@ -1,0 +1,4 @@
+/logs/** -text
+/inventory.json -text
+/README.md text eol=lf
+/SHA256SUMS text eol=lf

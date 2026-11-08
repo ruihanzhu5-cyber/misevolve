@@ -1,0 +1,5 @@
+Traceback (most recent call last):
+  File "/root/misevolve-phase3/results/acceptance/native-handoff-eVLV40Gk/probe.py", line 42, in <module>
+    assert first.global_skill_id != artifact.global_skill_id and artifact.version != first.version
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
