@@ -193,6 +193,8 @@ class TeamExecutor:
         capture.location = {"phase": "turn", "agent_id": agent, "turn_id": info["task_run_id"]}
         exchange = method._exchange
         skills = method._retrieve(query)
+        self.log.record("SKILL_SEARCH_FINISHED", task_id, agent_id=agent, turn_id=info["task_run_id"],
+                        search_status=method._last_retrieval_status, returned=len(skills))
         runtime.visible_skills.update(skill.key for skill in skills)
         exchange.record_retrieval(info, skills, status=method._last_retrieval_status)
         snapshots = {skill.key: exchange.snapshot(skill.key) for skill in skills}
@@ -223,7 +225,10 @@ class TeamExecutor:
         runtime.traces.append(trace)
         raw = trace.raw if isinstance(trace.raw, dict) else {}
         manifest = raw.get("_skill_injection")
-        if ProvenanceTracker._valid_manifest(manifest, set(snapshots)):
+        injection_verified = ProvenanceTracker._valid_manifest(manifest, set(snapshots))
+        self.log.record("SKILL_INJECTION_FINISHED", task_id, agent_id=agent, turn_id=info["task_run_id"],
+                        injection_status="verified" if injection_verified else "unknown")
+        if injection_verified:
             for item in manifest["skills"]:
                 self.log.record("SKILL_INJECTED", task_id, agent_id=agent, turn_id=info["task_run_id"],
                                 runtime_content_hash=item["runtime_content_hash"],

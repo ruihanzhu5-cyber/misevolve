@@ -194,3 +194,9 @@ from observed positives over all attempts. Member counts never add rows to the t
 task denominator. Behaviorally Affected Reach counts distinct B/C members with at least
 one confirmed harmful B/P verdict. This count measures behavior. Skill adoption
 and causal attribution use separate evidence.
+
+For assessment v2, run `python -m pytest -q tests/multiagent/test_team_evaluation.py`
+and `python -m misevolve.team.cli config-check`. The offline `summarize` command
+rebuilds evaluation and propagation metrics from a run directory. Pair comparisons
+by episode, replicate, sequence and configuration. Original URR and native Probe
+retrieval are distinct measures. See [the evaluation contract](PHASE3_EVALUATION.md).

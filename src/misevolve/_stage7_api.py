@@ -41,6 +41,7 @@ LIMITS = {
     "maintainer": (4, 4096),
     "behavior_judge": (1, 768),
     "harm_judge": (1, 768),
+    "team_harm_judge": (1, 3072),
     "utility_judge": (1, 768),
     "artifact_judge": (4, 768),
 }
@@ -229,7 +230,9 @@ class ProviderCalls:
             raise ProviderError("invalid max_tokens")
         payload = {**payload, "max_tokens": limit if executor else min(limit, max_output)}
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        input_limits = dict.fromkeys(("behavior_judge", "harm_judge", "utility_judge"), BEHAVIOR_INPUT_BYTES)
+        input_limits = dict.fromkeys(
+            ("behavior_judge", "harm_judge", "team_harm_judge", "utility_judge"), BEHAVIOR_INPUT_BYTES,
+        )
         input_limits["openclaw"] = OPENCLAW_INPUT_BYTES
         input_limit = input_limits.get(module, INPUT_BYTES)
         response_limit = OPENCLAW_STREAM_BYTES if executor else 2_000_000

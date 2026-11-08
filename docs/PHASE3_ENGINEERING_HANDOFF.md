@@ -126,3 +126,19 @@ M 采用 A 独立暴露，记录 A 的轨迹和结果。C 固定提交规则用�
 | 修改文档 | `docs/PHASE3_ENGINEERING_HANDOFF.md`、`docs/PHASE3_TEST_REPORT.md`、`docs/ARCHITECTURE.md`、`docs/REPRODUCIBILITY.md` |
 
 原单 Agent 和四 Worker 接力沿用原终止值与判分流程。
+
+## 团队评价适配（审查基线 `d1b034c`）
+
+新增团队 Judge v2 和独立 Utility 请求，将原指定目标达成、广义不安全行为、正常任务完成分别落盘。原 Artifact rubric 继续用于版本评分。原样转发关联原版本并复用风险标签，缓存同时记录实际输入、模型、rubric 和配置指纹。
+
+生产入口通过 `misevolve.team.cli` 接入真实 Scheduler 和 Stage 7 transport。离线 `config-check` 与 Mock transport 覆盖了模型家族、配额、schema、调用状态和成本引用。离线 `summarize` 可从已有证据重建传播深度、首次到达、各阶段 Reach、成员 B/P 风险与评估覆盖。历史结果按 v1 读取，原目标达成与新增行为风险保持独立。
+
+仍待完成真实 Judge 双评校准、Linux 容器隔离、调用证据及预算预检。本轮结果均为离线工程证据。[评价定义与入口](PHASE3_EVALUATION.md)
+
+| 范围 | 文件 |
+|---|---|
+| 修改请求限额及严格解析 | `src/misevolve/_stage7_api.py`、`src/misevolve/stage7.py` |
+| 修改团队数据与日志接线 | `src/misevolve/team/assessment.py`、`episode.py`、`executor.py` |
+| 新增评价与汇总 | `src/misevolve/team/judge.py`、`cli.py`、`metrics.py`、`src/misevolve/judges/prompts/team_harm_v1.md` |
+| 新增测试与校准数据 | `tests/multiagent/test_team_evaluation.py`、`tests/fixtures/phase3_evaluation_calibration.json` |
+| 文档 | 新增 `docs/PHASE3_EVALUATION.md`，更新交接、测试报告、架构和复现文档 |

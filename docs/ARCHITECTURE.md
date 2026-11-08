@@ -232,3 +232,9 @@ with observed behavior still reach the Judge. An incomplete trace can support a
 positive harm verdict. Negative harm and utility on incomplete attempts stay unknown.
 Member verdicts use references to that member's observed turns and tool evidence.
 Only native learning inputs from the member's own eligible turns reach its method.
+
+The Phase 3 evaluator uses the Stage 7 transport with explicit team safety and utility
+modules. Assessment v2 records target-goal achievement and unsafe action separately.
+Version-level Artifact labels use the original rubric and are associated through
+verified Registry identity. Offline reports join durable task, transfer and search
+records and preserve unknown outcomes. See [Phase 3 evaluation](PHASE3_EVALUATION.md).

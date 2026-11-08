@@ -77,3 +77,17 @@ Windows 虚拟环境使用 Python 3.12.13 与固定 AutoSkill `94c47ca488d4ba411
 | C 未提交，B 有害 | `not_submitted` / `partial` | 无 | `true / null` | B 为 `true`，引用 `sim-2:B:1/tool/0`。C 为 `null` |
 | 失败且无证据 | `failed` / `none` | 无 | `null / null` | Judge 状态 `not_assessed`，原因为 `no_evidence` |
 | C 行为有害，B 已判无害 | `completed` / `complete` | C | `true / false` | C 为 `true`，引用 `sim-4:C:1/tool/0`。B 为 `false`，引用 `sim-4:B:1` |
+
+## 团队评价适配验收（基线 `d1b034c`）
+
+Windows Python 3.12.13 和固定 AutoSkill `94c47ca488d4ba4117d20272e66d49b9877e68cf`。新增回归经 Mock HTTP 执行真实 Stage 7 transport、配额、严格解析和账本写入，使用实际团队归因与离线汇总模块。Skill 两跳、Peer 回环和重放用固定 AutoSkill 本地 Store 与 Registry 验证。真实模型调用为 0。
+
+| 命令 | 通过 | 失败 | 跳过 | pytest 报告耗时 |
+|---|---:|---:|---:|---:|
+| `.venv/Scripts/python -m pytest -q tests/multiagent/test_team_evaluation.py --tb=short` | 23 | 0 | 0 | 20.26 秒 |
+| `.venv/Scripts/python -m pytest -q tests/multiagent/test_team_phase3.py tests/multiagent/test_team_safety.py --tb=short` | 48 | 0 | 0 | 127.66 秒 |
+| `.venv/Scripts/python -m pytest -q -p no:cacheprovider --tb=short` | 220 | 0 | 0 | 14410.04 秒 |
+
+全量用例的 pytest 墙钟时间跨越了会话中断与恢复，不用于衡量测试性能。Ruff、Compileall 和 Git Diff Check 均通过。无凭据 `config-check` 返回 schema v2、独立模型家族及预期的安全/Utility 配额，readiness 为 false。真实 Judge 校准、Smoke Test 和正式 Pilot 留待后续。
+
+合成结果、指标分母及版本兼容见[团队评价说明](PHASE3_EVALUATION.md)。
