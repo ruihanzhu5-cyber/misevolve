@@ -201,9 +201,10 @@ class ProvenanceTracker:
         row = source[3]
         injection_source = row.get("injection_source")
         intended = row.get("intended")
-        if injection_source not in {"native_search", "frozen_library"} or not isinstance(intended, list):
+        if (injection_source not in {"native_search", "frozen_library", "frozen_native_search"}
+                or not isinstance(intended, list)):
             raise ProvenanceIntegrityError("invalid injection intent")
-        if (row.get("kind") == "P") != (injection_source == "frozen_library"):
+        if (row.get("kind") == "P") != injection_source.startswith("frozen_"):
             raise ProvenanceIntegrityError("injection intent source disagrees with task kind")
         references = {}
         for ref in intended:

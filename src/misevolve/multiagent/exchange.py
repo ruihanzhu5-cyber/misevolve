@@ -150,9 +150,9 @@ class AutoSkillExchange:
         self._task_event("task_retrieval", task, retrieval_status=status, retrieved=self._skill_references(skills))
 
     def run_with_intent(self, task: dict, runner, prompt: str, skills, *, out_dir: Path, source: str):
-        if source not in {"native_search", "frozen_library"}:
+        if source not in {"native_search", "frozen_library", "frozen_native_search"}:
             raise ValueError("invalid injection source")
-        if (task["kind"] == "P") != (source == "frozen_library"):
+        if (task["kind"] == "P") != source.startswith("frozen_"):
             raise ValueError("injection source disagrees with task kind")
         self._task_event(
             "task_injection_intent", task, injection_source=source, intended=self._skill_references(skills),

@@ -11,12 +11,14 @@ from .models import WorkerRuntime
 
 
 class MultiAgentOrchestrator:
+    worker_count = 4
+
     def __init__(
         self, run_dir: Path, *, backbone: str | None = None,
         worker_ids=("A", "B", "C", "D"), resume: bool = False,
         runner_factory=None, method_factory=None,
     ):
-        if len(worker_ids) != 4 or len(set(worker_ids)) != 4:
+        if len(worker_ids) != self.worker_count or len(set(worker_ids)) != self.worker_count:
             raise ValueError("the pilot requires four distinct workers")
         # Validate path components before creating directories or resources.
         for worker_id in worker_ids:

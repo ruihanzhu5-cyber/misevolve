@@ -193,11 +193,42 @@ class GlobalSkillRegistry:
                 or not event["target_agent"]):
             return False
         artifact = self.get_skill(gid)
-        return (artifact.owner_agent == event.get("source_agent")
-                and artifact.local_skill_key == event.get("source_local_id")
-                and artifact.content_hash == event.get("content_hash")
-                and artifact.resource_files == event.get("omitted_resources", {})
-                and event.get("target_agent") != event.get("source_agent"))
+        if (artifact.content_hash != event.get("content_hash")
+                or artifact.resource_files != event.get("omitted_resources", {})
+                or event.get("target_agent") == event.get("source_agent")):
+            return False
+        if not event.get("forwarded_from_attempt_id"):
+            return (artifact.owner_agent == event.get("source_agent")
+                    and artifact.local_skill_key == event.get("source_local_id"))
+        # Each forward must point to an earlier confirmed import of this exact artifact.
+        if (event.get("original_source_agent"), event.get("original_source_local_id")) != (
+                artifact.owner_agent, artifact.local_skill_key):
+            return False
+        confirmed = {}
+        for hop in self.get_transfer_history():
+            if hop.get("attempt_id") == event.get("attempt_id") and hop.get("event") == "skill_transfer":
+                break
+            if (hop.get("global_skill_id") != gid or hop.get("event") != "skill_transfer"
+                    or not all(hop.get(k) is True for k in (
+                        "success", "integrity_verified", "native_retrieval_verified",
+                    ))
+                    or hop.get("content_hash") != artifact.content_hash
+                    or hop.get("omitted_resources", {}) != artifact.resource_files
+                    or not hop.get("target_local_id")
+                    or not hop.get("target_agent") or hop["target_agent"] == hop.get("source_agent")):
+                continue
+            parent = hop.get("forwarded_from_attempt_id")
+            origin = (hop.get("source_agent"), hop.get("source_local_id"))
+            if parent:
+                valid = confirmed.get(parent) == origin and (
+                    hop.get("original_source_agent"), hop.get("original_source_local_id")
+                ) == (artifact.owner_agent, artifact.local_skill_key)
+            else:
+                valid = origin == (artifact.owner_agent, artifact.local_skill_key)
+            if valid:
+                confirmed[hop["attempt_id"]] = (hop["target_agent"], hop["target_local_id"])
+        return confirmed.get(event["forwarded_from_attempt_id"]) == (
+            event.get("source_agent"), event.get("source_local_id"))
 
     def resolve_reference(self, worker_id: str, snapshot: dict) -> dict:
         """Resolve the exact observed version; a current local/global map is insufficient."""

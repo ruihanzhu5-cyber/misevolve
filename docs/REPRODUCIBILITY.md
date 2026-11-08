@@ -173,3 +173,16 @@ Reconstruction compares event identities and evidence for the same input journal
 The episode reports use fixed planned task denominators. Keep incomplete attempts
 separate from complete episodes when running legacy aggregation.
 See [the episode contract](MULTIAGENT_EPISODE.md).
+
+## Phase 3 team verification
+
+Run `python -m pytest -q tests/multiagent/test_team_phase3.py` with the pinned AutoSkill
+checkout used by the Stage 2–6 tests. The test fixture blocks network and Docker.
+Scripted sessions and fake LLM responses exercise native local ingest, search, import and
+version tracking across the same 21 source tasks in all three team protocols.
+
+Retain `team_manifest.json`, `all_rows.json`, `team_events.jsonl`, per-task trajectories,
+the Registry and its transfer journal, frozen snapshots, and each member's native journals.
+These conditions use A-only M exposure and per-member native search on frozen P stores.
+Report them separately from the serial Stage 7.2 and original single-agent conditions.
+See the [Phase 3 test report](PHASE3_TEST_REPORT.md).

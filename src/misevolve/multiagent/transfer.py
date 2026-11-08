@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 
 from ._io import append_jsonl
+from .exchange import imported_files
 from .models import WorkerRuntime
 from .registry import GlobalSkillRegistry
 
@@ -14,12 +15,27 @@ class SkillTransferManager:
         self.registry = registry
         self.workers = workers
 
-    def transfer(self, global_skill_id: str, source_agent: str, target_agent: str) -> str:
+    def transfer(
+        self, global_skill_id: str, source_agent: str, target_agent: str, *,
+        delivery_id: str | None = None, forward_local_id: str | None = None,
+    ) -> str:
         artifact = self.registry.get_skill(global_skill_id)
         if source_agent == target_agent or source_agent not in self.workers or target_agent not in self.workers:
             raise ValueError("transfer requires two distinct initialized workers")
-        if artifact.owner_agent != source_agent:
+        if artifact.owner_agent != source_agent and forward_local_id is None:
             raise ValueError("transfer source must own the registered artifact")
+        if forward_local_id is not None and delivery_id is None:
+            raise ValueError("forwarding requires a durable delivery ID")
+        history = self.registry.get_transfer_history() if delivery_id is not None else []
+        for previous in history:
+            if previous.get("delivery_id") != delivery_id:
+                continue
+            if (previous["global_skill_id"], previous["source_agent"], previous["target_agent"],
+                    previous.get("forward_local_id")) != (
+                    global_skill_id, source_agent, target_agent, forward_local_id):
+                raise ValueError("delivery ID is already bound to another transfer")
+            if self.registry.verified_transfer(previous):
+                return previous["target_local_id"]
         event = {
             "event": "skill_transfer", "attempt_id": uuid.uuid4().hex,
             "global_skill_id": global_skill_id, "source_agent": source_agent, "target_agent": target_agent,
@@ -31,11 +47,28 @@ class SkillTransferManager:
             "integrity_verified": False, "native_retrieval_verified": False,
             "relationship": "transferred_from", "error": None,
         }
+        if delivery_id is not None:
+            event.update(delivery_id=delivery_id, forward_local_id=forward_local_id)
+        if forward_local_id is not None:
+            source = self.workers[source_agent].method._exchange.snapshot(forward_local_id)
+            predecessor = next((row for row in reversed(history)
+                                if row.get("global_skill_id") == global_skill_id
+                                and row.get("target_agent") == source_agent
+                                and row.get("target_local_id") == forward_local_id
+                                and self.registry.verified_transfer(row)), None)
+            if (predecessor is None or source.get("origin") != "imported"
+                    or source.get("imported_from_global_id") != global_skill_id
+                    or source["skill_files"] != imported_files(artifact.skill_files, forward_local_id)
+                    or source.get("resource_files")):
+                raise ValueError("forwarding requires an intact, verified import")
+            event.update(source_local_id=forward_local_id, original_source_agent=artifact.owner_agent,
+                         original_source_local_id=artifact.local_skill_key,
+                         forwarded_from_attempt_id=predecessor["attempt_id"])
         self.registry.append_event({**event, "event": "skill_transfer_started"})
         target = self.workers[target_agent]
         try:
             local_id = target.method.import_external_skill(
-                artifact.skill_files, global_skill_id, source_agent=source_agent,
+                artifact.skill_files, global_skill_id, source_agent=artifact.owner_agent,
                 source_local_id=artifact.local_skill_key,
             )
             target.remember_import(global_skill_id, local_id)

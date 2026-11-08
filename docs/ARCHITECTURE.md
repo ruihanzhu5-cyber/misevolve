@@ -211,3 +211,17 @@ different relations. A native revision needs exact before/after identity; it is 
 semantic derivation. Generic tool calls and assistant text never establish invocation.
 Normalized logs contain references and hashes, not prompts or complete skill contents.
 See [the provenance contract](PROVENANCE.md) for schema, query, and recovery semantics.
+
+## Phase 3 team execution
+
+The opt-in `misevolve.team` package runs B and P tasks in three separate member sessions.
+The host delivers messages and native Skill imports only through the chosen organization
+router. Within a task, a member continues the same sandbox session. At the task boundary
+the sessions close and only member-owned Skill Stores persist. M tasks are isolated
+exposure runs for A. C submits the single outcome for each B or P team task.
+
+Phase 3 probes perform native search against each member's own frozen Store and forbid
+imports and maintenance. The earlier serial episode retains direct frozen-library injection.
+The Registry retains original authorship when a member forwards a verified unchanged import.
+The team journal separately records each immediate sender, receiver and preceding hop.
+See [Phase 3 engineering handoff](PHASE3_ENGINEERING_HANDOFF.md) for the execution and evidence contracts.
