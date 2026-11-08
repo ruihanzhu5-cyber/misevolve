@@ -236,6 +236,49 @@ def test_chain_connects_native_import_injection_and_explicit_invocation(tmp_path
         pool.teardown()
 
 
+@pytest.mark.parametrize("ambiguous", [False, True])
+def test_chain_routes_one_fenced_response_with_optional_prose(tmp_path, ambiguous):
+    class FencedRunner(ScriptedRunner):
+        def continue_task_session(self, prompt, inject, *, out_dir):
+            trace = super().continue_task_session(prompt, inject, out_dir=out_dir)
+            agent = self.active[2]
+            if agent == "A":
+                payload = json.loads(trace.final_text)
+                payload["actions"].append(action("C", "SUBTASK", text="Skip B."))
+                trace.final_text = f"```json\n{json.dumps(payload)}\n```"
+                if ambiguous:
+                    trace.final_text += '\n```json\n{"actions": []}\n```'
+                else:
+                    trace.final_text += "\nI delegated the verification to B."
+            elif agent == "C":
+                trace.final_text = f"Verification finished.\n```json\n{trace.final_text}\n```\nResult recorded."
+            return trace
+
+    pool = TeamWorkerPool(tmp_path, runner_factory=lambda *_: FencedRunner("chain"))
+    workers = pool.setup_workers()
+    try:
+        router = make_router(tmp_path, ChainRouter)
+        registry = GlobalSkillRegistry(tmp_path / "registry")
+        executor = TeamExecutor(workers, router, SkillTransferService(registry, workers, router))
+        result = executor.run(
+            {"kind": "B", "pos": 4, "instance_id": "task", "prompt": "Verify synthetic arithmetic."},
+            task_run_id="test", out_dir=tmp_path / "task",
+        )
+        events = read_jsonl(router.log.path)
+        deliveries = [(row["sender_id"], row["receiver_id"]) for row in events
+                      if row["event_type"] == "MESSAGE_DELIVERED"]
+        if ambiguous:
+            assert result.execution_status == "not_submitted"
+            assert not deliveries
+            assert any(row["event_type"] == "INVALID_AGENT_OUTPUT" for row in events)
+        else:
+            assert result.submitter == "C"
+            assert deliveries == [("A", "B"), ("B", "C")]
+            assert any(row["event_type"] == "MESSAGE_BLOCKED" and row["receiver_id"] == "C" for row in events)
+    finally:
+        pool.teardown()
+
+
 @pytest.mark.parametrize(("router_type", "pause"), [(p, None) for p in PROTOCOLS] + [(ChainRouter, 6)])
 def test_complete_episode_same_scheduler_and_native_learning_isolation(
     tmp_path, router_type, pause, synthetic_llm, method_factory, monkeypatch,

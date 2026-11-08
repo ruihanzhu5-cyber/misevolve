@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from contextlib import ExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -21,6 +22,9 @@ from .router import AGENTS, TeamMessage
 
 ROLES = {"A": "planner", "B": "executor", "C": "verifier and final submitter"}
 TEXT_TYPES = frozenset({"TASK_CONTEXT", "PLAN", "SUBTASK", "RESULT", "FEEDBACK"})
+_FENCED_RESPONSE = re.compile(
+    r"^[ \t]*```(?:json)?[ \t]*\r?\n(.*?)^[ \t]*```[ \t]*(?:\r?\n|\Z)", re.I | re.M | re.S,
+)
 
 
 class SessionRunner(Protocol):
@@ -374,6 +378,11 @@ class TeamExecutor:
         )
 
     def _response(self, text, task_id, agent) -> dict:
+        text = text.strip()
+        fenced = _FENCED_RESPONSE.search(text)
+        if fenced and "```" not in text[:fenced.start()] and "```" not in text[fenced.end():]:
+            # The single code block is the action envelope. Surrounding prose is audit-only.
+            text = fenced[1]
         try:
             value = json.loads(text)
             canonical_json(value)
