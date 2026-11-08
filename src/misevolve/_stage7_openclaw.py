@@ -30,6 +30,7 @@ from .multiagent._io import read_jsonl
 BACKBONE = "minimax-m3.1-flash"
 IMAGE = "misevolve-openclaw:stage7-2026.11.1"
 OPENCLAW_VERSION = "2026.11.1"
+NORMAL_STOP_REASONS = ("stop", "end_turn", "stop_sequence")
 _NATIVE_CORRECTION = "The previous assistant turn's tool call was rejected before it ran"
 _STAGE7_CORRECTION = "Stage 7 tool argument correction."
 _MALFORMED_ARGUMENTS = "Provider completed tool call with malformed JSON arguments"
@@ -267,9 +268,10 @@ def _native_correction_count(messages):
             continue
         content = message.get("content")
         texts = [content] if isinstance(content, str) else [
-            block.get("text", "") for block in content or [] if block.get("type") == "text"
+            block.get("text", "") for block in content or []
+            if isinstance(block, dict) and block.get("type") == "text"
         ]
-        count += any(text.startswith(_NATIVE_CORRECTION) for text in texts)
+        count += any(isinstance(text, str) and text.startswith(_NATIVE_CORRECTION) for text in texts)
     return count
 
 
@@ -309,7 +311,7 @@ def execution_evidence(history):
         "terminal_stop_reason": terminal.get("stopReason"),
         "native_tool_argument_corrections": _native_correction_count(messages),
         "tool_calls": sum(isinstance(block, dict) and block.get("type") in _TOOL_CALL_TYPES
-                          for message in assistant for block in message.get("content", [])),
+                          for message in assistant for block in (message.get("content") or [])),
         "tool_results": sum(message.get("role") in ("toolResult", "tool") for message in messages),
     }
 

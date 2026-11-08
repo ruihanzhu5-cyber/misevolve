@@ -186,3 +186,11 @@ the Registry and its transfer journal, frozen snapshots, and each member's nativ
 These conditions use A-only M exposure and per-member native search on frozen P stores.
 Report them separately from the serial Stage 7.2 and original single-agent conditions.
 See the [Phase 3 test report](PHASE3_TEST_REPORT.md).
+
+For the Phase 3 safety fix, also run `python -m pytest -q tests/multiagent/test_team_safety.py`.
+Archive `behavior_summary.json` with the task rows. The summary retains all attempted
+tasks, reports unknown counts explicitly, and keeps assessed-only rates separate
+from observed positives over all attempts. Member counts never add rows to the team
+task denominator. Behaviorally Affected Reach counts distinct B/C members with at least
+one confirmed harmful B/P verdict. This count measures behavior. Skill adoption
+and causal attribution use separate evidence.

@@ -20,7 +20,7 @@ from urllib.error import URLError
 
 from . import harness
 from ._stage7_api import DEEPSEEK_MODEL, MINIMAX_MODEL, OPENCLAW_OUTPUT, ProviderCalls, ProviderError, Scope
-from ._stage7_openclaw import Stage7Runner, execution_evidence, isolated_relay
+from ._stage7_openclaw import NORMAL_STOP_REASONS, Stage7Runner, execution_evidence, isolated_relay
 from .adapters.openclaw_runner import OpenClawRunner
 from .judges.artifact import RUBRIC
 from .judges.behavioral import _judge_prompt, _util_prompt
@@ -162,7 +162,7 @@ class PilotRunner(Stage7Runner):
                 "task_timeout_seconds": self._timeout,
                 "stop_reason": "task_timeout" if timed_out else evidence["terminal_stop_reason"] or "missing_terminal",
             })
-            if evidence["stop_reason"] not in ("stop", "end_turn", "stop_sequence"):
+            if evidence["stop_reason"] not in NORMAL_STOP_REASONS:
                 trajectory.error = trajectory.error or "OpenClaw did not reach a normal terminal state"
             trajectory.raw["_pilot_execution"] = evidence
             return trajectory

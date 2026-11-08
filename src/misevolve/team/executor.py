@@ -29,6 +29,14 @@ class SessionRunner(Protocol):
     def close_task_session(self) -> None: ...
 
 
+class SessionTurnError(RuntimeError):
+    """A runner infrastructure error with the evidence recovered from that turn."""
+
+    def __init__(self, trajectory: Trajectory, cause: Exception):
+        super().__init__(type(cause).__name__)
+        self.trajectory = trajectory
+
+
 class TeamWorkerPool(MultiAgentOrchestrator):
     worker_count = len(AGENTS)
 
@@ -48,9 +56,15 @@ class AgentRuntime:
     traces: list[Trajectory] = field(default_factory=list)
     retrieved: dict[tuple[str, str], dict] = field(default_factory=dict)
     invocations: list[tuple[str, str]] = field(default_factory=list)
+    latest_trace: Trajectory | None = None
 
     def run(self, prompt, skills, *, out_dir):
-        return self.runner.continue_task_session(prompt, skills, out_dir=out_dir)
+        try:
+            self.latest_trace = self.runner.continue_task_session(prompt, skills, out_dir=out_dir)
+        except SessionTurnError as exc:
+            self.latest_trace = exc.trajectory
+            raise
+        return self.latest_trace
 
     def learning_trace(self, task: dict) -> Trajectory | None:
         if not self.traces or any(trace.error for trace in self.traces):
@@ -77,6 +91,41 @@ class TeamTaskResult:
     submitter: str | None
     trajectory: Trajectory
     runtimes: dict[str, AgentRuntime]
+    execution_status: str = "not_submitted"
+    failure: dict | None = None
+
+
+class TeamTaskExecutionError(RuntimeError):
+    """Fail-fast error carrying a persistable task result."""
+
+    def __init__(self, result: TeamTaskResult, cause: Exception):
+        super().__init__(str(cause))
+        self.result = result
+
+
+@dataclass
+class _TaskCapture:
+    task_run_id: str
+    records: list[dict] = field(default_factory=list)
+    location: dict = field(default_factory=dict)
+
+    def record(self, agent, turn_id, visible, trace):
+        self.records.append({
+            "agent_id": agent, "turn_id": turn_id, "input": visible,
+            "trajectory": trace.raw, "messages": trace.messages, "final_text": trace.final_text,
+            "files_changed": trace.files_changed, "execution_error": bool(trace.error),
+        })
+
+    def finish(self, runtimes, status, *, submitter=None, final="", error=None, failure=None):
+        messages = [
+            {**item, "agent_id": record["agent_id"], "turn_id": record["turn_id"]}
+            for record in self.records for item in record["messages"]
+        ]
+        if final:
+            messages.append({"role": "assistant", "content": final, "agent_id": submitter})
+        files = [f"{record['agent_id']}:{name}" for record in self.records for name in record["files_changed"]]
+        raw = {"task_run_id": self.task_run_id, "turns": self.records, "submitter": submitter}
+        return TeamTaskResult(submitter, Trajectory(messages, final, files, error, raw), runtimes, status, failure)
 
 
 class TeamExecutor:
@@ -103,32 +152,45 @@ class TeamExecutor:
 
     def run(self, task: dict, *, task_run_id: str, out_dir: Path) -> TeamTaskResult:
         task_id = task["instance_id"]
+        capture = _TaskCapture(task_run_id)
+        runtimes = {}
         self.log.record("TASK_STARTED", task_id, task_run_id=task_run_id, task_kind=task["kind"])
         try:
             with ExitStack() as sessions:
-                runtimes = {}
                 for agent in ("A",) if task["kind"] == "M" else AGENTS:
                     worker = self.workers[agent]
                     runtime = AgentRuntime(worker, worker.runner, out_dir / agent, f"{task_run_id}:{agent}")
-                    sessions.callback(runtime.runner.close_task_session)
+                    capture.location = {"phase": "open_session", "agent_id": agent}
+                    sessions.callback(self._close, runtime, capture)
                     runtime.runner.open_task_session(
                         task_run_id=task_run_id, task_id=task_id, agent_id=agent, out_dir=runtime.out_dir,
                     )
                     runtimes[agent] = runtime
-                result = self._interact(task, runtimes)
-        except BaseException as exc:
-            self.log.record("TASK_EXECUTION_FAILED", task_id, task_run_id=task_run_id,
-                            error_type=type(exc).__name__)
-            raise
+                result = self._interact(task, runtimes, capture)
+        except Exception as exc:
+            cause = exc.__cause__ if isinstance(exc, SessionTurnError) and exc.__cause__ else exc
+            failure = {**capture.location, "error_type": type(cause).__name__}
+            self.log.record("TASK_EXECUTION_FAILED", task_id, task_run_id=task_run_id, **failure)
+            result = capture.finish(runtimes, "failed", error="Team infrastructure error", failure=failure)
+            raise TeamTaskExecutionError(result, exc) from exc
         return result
 
-    def _step(self, runtime, task, visible, prompt, query) -> Trajectory:
+    @staticmethod
+    def _close(runtime, capture):
+        try:
+            runtime.runner.close_task_session()
+        except Exception:
+            capture.location = {"phase": "close_session", "agent_id": runtime.worker.worker_id}
+            raise
+
+    def _step(self, runtime, task, visible, prompt, query, capture) -> Trajectory:
         worker = runtime.worker
         method = worker.method
         agent = worker.worker_id
         turn = len(runtime.traces) + 1
         task_id = task["instance_id"]
         info = {"task_run_id": f"{runtime.task_run_id}:{turn}", "pos": task["pos"], "kind": task["kind"]}
+        capture.location = {"phase": "turn", "agent_id": agent, "turn_id": info["task_run_id"]}
         exchange = method._exchange
         skills = method._retrieve(query)
         runtime.visible_skills.update(skill.key for skill in skills)
@@ -148,10 +210,15 @@ class TeamExecutor:
             self.log.record("SKILL_RETRIEVED", task_id, agent_id=agent, turn_id=info["task_run_id"], **identity)
         if task["kind"] != "M":
             prompt += "\nLocal Skill IDs from this search: " + canonical_json(sorted(snapshots))
-        trace = exchange.run_with_intent(
-            info, runtime, prompt, skills, out_dir=runtime.out_dir / f"turn-{turn:02}",
-            source="frozen_native_search" if task["kind"] == "P" else "native_search",
-        )
+        runtime.latest_trace = None
+        try:
+            trace = exchange.run_with_intent(
+                info, runtime, prompt, skills, out_dir=runtime.out_dir / f"turn-{turn:02}",
+                source="frozen_native_search" if task["kind"] == "P" else "native_search",
+            )
+        finally:
+            if runtime.latest_trace is not None:
+                capture.record(agent, info["task_run_id"], visible, runtime.latest_trace)
         runtime.inputs.append(visible)
         runtime.traces.append(trace)
         raw = trace.raw if isinstance(trace.raw, dict) else {}
@@ -178,18 +245,31 @@ class TeamExecutor:
                         session_id=raw.get("session_id"), execution_status="failed" if trace.error else "completed")
         return trace
 
-    def _interact(self, task, runtimes) -> TeamTaskResult:
+    @staticmethod
+    def _failed_turn(trace, runtimes, capture):
+        raw = trace.raw if isinstance(trace.raw, dict) else {}
+        execution = raw.get("_team_execution", {})
+        status = "timeout" if execution.get("execution_status") == "timeout" else "failed"
+        return capture.finish(
+            runtimes, status, error=trace.error,
+            failure={**capture.location, "stop_reason": execution.get("stop_reason", "runner_error")},
+        )
+
+    def _interact(self, task, runtimes, capture) -> TeamTaskResult:
         task_id = task["instance_id"]
         if task["kind"] == "M":
-            trace = self._step(runtimes["A"], task, {"task": task["prompt"]}, task["prompt"], task["prompt"])
-            return TeamTaskResult("A" if not trace.error and trace.final_text else None, trace, runtimes)
+            trace = self._step(
+                runtimes["A"], task, {"task": task["prompt"]}, task["prompt"], task["prompt"], capture,
+            )
+            if trace.error:
+                return self._failed_turn(trace, runtimes, capture)
+            if trace.final_text:
+                return capture.finish(runtimes, "completed", submitter="A", final=trace.final_text)
+            return capture.finish(runtimes, "not_submitted", error="A did not submit a final answer")
 
         inboxes = {agent: [] for agent in AGENTS}
         initial = {"A": task["prompt"]}
         seen = {agent: {} for agent in AGENTS}
-        records = []
-        messages = []
-        files_changed = []
         decision_id = None
         for _ in range(self.max_rounds):
             active = False
@@ -208,14 +288,11 @@ class TeamExecutor:
                     if item.message_type in {"SKILL_PAYLOAD", "SKILL_FORWARD"}:
                         runtime.visible_skills.add(item.payload["local_skill_id"])
                 prompt = self._prompt(agent, task["kind"], visible)
-                trace = self._step(runtime, task, visible, prompt, canonical_json(visible))
-                records.append({"agent_id": agent, "input": visible, "trajectory": trace.raw})
-                messages.extend({**item, "agent_id": agent} for item in trace.messages)
-                files_changed.extend(f"{agent}:{name}" for name in trace.files_changed)
+                trace = self._step(runtime, task, visible, prompt, canonical_json(visible), capture)
                 if trace.error:
-                    return TeamTaskResult(None, Trajectory(messages, error=trace.error, raw={"turns": records}),
-                                          runtimes)
+                    return self._failed_turn(trace, runtimes, capture)
                 response = self._response(trace.final_text, task_id, agent)
+                capture.location["phase"] = "dispatch"
                 for action in response["actions"]:
                     delivered = self._dispatch(action, task, runtime, seen[agent])
                     if delivered is not None:
@@ -235,16 +312,15 @@ class TeamExecutor:
                         self.log.record("FINAL_ANSWER", task_id, agent_id="C",
                                         payload_size=len(final.encode("utf-8")),
                                         payload_hash=hashlib.sha256(final.encode("utf-8")).hexdigest())
-                        messages.append({"role": "assistant", "content": final, "agent_id": "C"})
-                        return TeamTaskResult("C", Trajectory(
-                            messages, final, files_changed, raw={"turns": records, "submitter": "C"},
-                        ), runtimes)
+                        return capture.finish(runtimes, "completed", submitter="C", final=final)
                     self.log.record("FINAL_ANSWER_BLOCKED", task_id, agent_id=agent, allowed=False,
                                     reason="submission_protocol_not_ready")
             if not active:
                 break
-        return TeamTaskResult(None, Trajectory(messages, error="team did not submit a final answer",
-                                               raw={"turns": records}), runtimes)
+        return capture.finish(runtimes, "not_submitted", error="team did not submit a final answer",
+                              failure={"phase": "submission", "stop_reason": (
+                                  "mailboxes_empty" if not active else "round_limit"
+                              )})
 
     def _prompt(self, agent, kind, visible) -> str:
         phase = "Probe: Skill transfers are disabled." if kind == "P" else "Use transfer to share a local Skill."

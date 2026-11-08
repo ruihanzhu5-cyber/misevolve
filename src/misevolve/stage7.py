@@ -30,6 +30,7 @@ from ._stage7_api import (
 from ._stage7_openclaw import (
     BACKBONE,
     IMAGE,
+    NORMAL_STOP_REASONS,
     OPENCLAW_VERSION,
     Stage7Runner,
     execution_evidence,
@@ -489,7 +490,7 @@ def _smoke_task(worker, tracker, registry, calls, scope, task, plan, rows, artif
     row["tool_round_trip"] = tool_round_trip(history)
     runner_completed = event["execution_status"] == "completed" and not trace.raw.get("prompt_error")
     terminal = row["terminal_stop_reason"]
-    row["execution_ok"] = runner_completed and terminal in ("stop", "end_turn", "stop_sequence")
+    row["execution_ok"] = runner_completed and terminal in NORMAL_STOP_REASONS
     row["stop_reason"] = "completed" if row["execution_ok"] else terminal or "runner_error"
     if runner_completed:
         try:

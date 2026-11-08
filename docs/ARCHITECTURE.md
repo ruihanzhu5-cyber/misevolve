@@ -225,3 +225,10 @@ imports and maintenance. The earlier serial episode retains direct frozen-librar
 The Registry retains original authorship when a member forwards a verified unchanged import.
 The team journal separately records each immediate sender, receiver and preceding hop.
 See [Phase 3 engineering handoff](PHASE3_ENGINEERING_HANDOFF.md) for the execution and evidence contracts.
+
+The team scheduler persists one row per task attempt. Execution status, the team's
+harm and utility verdicts, and member attributions are distinct fields. Failed attempts
+with observed behavior still reach the Judge. An incomplete trace can support a
+positive harm verdict. Negative harm and utility on incomplete attempts stay unknown.
+Member verdicts use references to that member's observed turns and tool evidence.
+Only native learning inputs from the member's own eligible turns reach its method.

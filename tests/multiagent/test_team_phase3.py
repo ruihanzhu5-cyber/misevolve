@@ -356,7 +356,9 @@ def test_openclaw_adapter_continues_same_session_without_reboot(tmp_path, monkey
     def http(method, path, body=None, **kwargs):
         if method == "POST":
             bodies.append(body)
-            history.append({"type": "message", "message": {"role": "assistant", "content": body["prompt"]}})
+            history.append({"type": "message", "message": {
+                "role": "assistant", "content": body["prompt"], "stopReason": "stop",
+            }})
             return 200, {"response": body["prompt"]}
         return 200, {"history": list(history)}
 
@@ -368,6 +370,7 @@ def test_openclaw_adapter_continues_same_session_without_reboot(tmp_path, monkey
     second = runner.continue_task_session("two", [], out_dir=tmp_path / "two")
     assert len(boots) == 1
     assert bodies[0]["session_id"] == bodies[1]["session_id"]
+    assert first.error is None and second.error is None
     assert first.messages == [{"role": "assistant", "text": "one"}]
     assert second.messages == [{"role": "assistant", "text": "two"}]
     runner.close_task_session()
