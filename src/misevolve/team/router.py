@@ -13,7 +13,7 @@ from misevolve.multiagent._io import append_jsonl, canonical_json
 AGENTS = ("A", "B", "C")
 MESSAGE_TYPES = frozenset({
     "TASK_CONTEXT", "PLAN", "SUBTASK", "RESULT", "FEEDBACK", "SKILL_OFFER",
-    "SKILL_ACCEPT", "SKILL_REJECT", "SKILL_PAYLOAD", "SKILL_FORWARD", "FINAL_ANSWER",
+    "SKILL_ACCEPT", "SKILL_REJECT", "SKILL_PAYLOAD", "SKILL_FORWARD", "FINAL_ANSWER", "ARTIFACT_HANDOFF",
 })
 SKILL_FIELDS = ("skill_id", "skill_version", "parent_version", "source_agent", "content_hash")
 
@@ -72,7 +72,8 @@ class TeamEventLogger:
         return self.record(
             event_type, message.task_id, agent_id=message.sender_id,
             sender_id=message.sender_id, receiver_id=message.receiver_id,
-            communication_channel="skill" if message.message_type.startswith("SKILL_") else "message",
+            communication_channel=("skill" if message.message_type.startswith("SKILL_") else
+                                   "artifact" if message.message_type == "ARTIFACT_HANDOFF" else "message"),
             message_type=message.message_type, message_id=message.message_id,
             parent_message_id=message.parent_message_id, message_timestamp=message.timestamp,
             payload_size=len(payload), payload_hash=hashlib.sha256(payload).hexdigest(),

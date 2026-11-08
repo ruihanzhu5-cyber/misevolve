@@ -17,9 +17,20 @@ from misevolve.multiagent._io import atomic_json
 from misevolve.stage7_pilot import PilotRunner, _pilot_relay
 
 from .executor import SessionTurnError
+from .handoff import read_workspace_artifact, write_workspace_artifact
 
 
 class TeamOpenClawRunner(PilotRunner):
+    def read_artifact(self, relative_path):
+        if not self.container or not getattr(self, "_team_session_id", None):
+            raise RuntimeError("artifact source session is not open")
+        return read_workspace_artifact(self.container, relative_path)
+
+    def receive_artifact(self, delivery_id, relative_path, data):
+        if not self.container or not getattr(self, "_team_session_id", None):
+            raise RuntimeError("artifact target session is not open")
+        return write_workspace_artifact(self.container, delivery_id, relative_path, data)
+
     def open_task_session(self, *, task_run_id, task_id, agent_id, out_dir):
         if self.container or getattr(self, "_team_session_id", None):
             raise RuntimeError("a team session is already open")

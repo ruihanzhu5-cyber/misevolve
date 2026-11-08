@@ -12,6 +12,9 @@ from misevolve.multiagent.provenance import ProvenanceTracker
 from misevolve.multiagent.registry import GlobalSkillRegistry
 
 from .assessment import assess_task, behavior_summary
+from .checkpoint import BOUNDARIES, restore_native_metadata
+from .checkpoint import load as load_checkpoint
+from .checkpoint import save as save_checkpoint
 from .executor import TeamExecutor, TeamTaskExecutionError, TeamWorkerPool
 from .router import AGENTS, TeamEventLogger
 from .skills import SkillTransferService
@@ -23,7 +26,7 @@ SCORES = ("content_unsafety", "generalization", "sneakiness")
 class TeamEpisodeScheduler:
     def __init__(
         self, pool: TeamWorkerPool, router_type, *, judge, artifact_judge=None, max_rounds=8,
-        run_metadata=None, configure_workers=None,
+        run_metadata=None, configure_workers=None, stop_after_pos=None, ensure_healthy=None,
     ):
         self.pool = pool
         self.router_type = router_type
@@ -32,6 +35,8 @@ class TeamEpisodeScheduler:
         self.max_rounds = max_rounds
         self.run_metadata = run_metadata or {}
         self.configure_workers = configure_workers
+        self.stop_after_pos = stop_after_pos
+        self.ensure_healthy = ensure_healthy
 
     def run(self, episode: dict) -> list[dict]:
         tasks = sorted(episode["task_sequence"], key=lambda task: task["pos"])
@@ -42,12 +47,14 @@ class TeamEpisodeScheduler:
                 or any(len({task["round"] for task in tasks[i:i + 3]}) != 1 for i in range(0, 21, 3))):
             raise ValueError("expected an original 21-task MMM BBB MMM BBB MMM BBB | PPP episode")
         root = self.pool.run_dir
-        if self.pool.resume or (root.exists() and any(root.iterdir())):
+        if self.stop_after_pos is not None and self.stop_after_pos not in BOUNDARIES:
+            raise ValueError("pause must be at a completed learning-block boundary")
+        if not self.pool.resume and root.exists() and any(root.iterdir()):
             raise FileExistsError("team episode requires a new output directory")
         episode_id = episode["episode_id"]
         log = TeamEventLogger(root / "team_events.jsonl", episode_id, self.router_type.protocol)
         router = self.router_type(log)
-        atomic_json(root / "team_manifest.json", {
+        manifest = {
             "episode_id": episode_id, "communication_protocol": router.protocol, "edges": sorted(router.edges),
             "agents": AGENTS, "max_rounds": self.max_rounds, "exposure_submitter": "A", "team_submitter": "C",
             "probe_policy": "frozen_local_native_search_no_import",
@@ -55,30 +62,43 @@ class TeamEpisodeScheduler:
             "behavior_summary": "behavior_summary.json",
             "assessment_schema_version": getattr(self.judge, "schema_version", 1),
             **{key: self.run_metadata.get(key) for key in (
-                "run_id", "replicate_id", "code_sha", "execution", "judge",
+                "run_id", "replicate_id", "code_sha", "execution", "judge", "runtime", "artifact_cache",
             )},
             "tasks": [{key: task[key] for key in ("pos", "kind", "round", "instance_id")} for task in tasks],
             "episode_sha256": hashlib.sha256(canonical_json(episode).encode("utf-8")).hexdigest(),
-        })
+        }
+        if self.pool.resume:
+            first, rows, snapshots = load_checkpoint(root, manifest)
+            if self.stop_after_pos is not None and self.stop_after_pos <= first:
+                raise ValueError("pause must be after the checkpoint")
+            # Mark the old checkpoint spent before any new state can be written.
+            atomic_json(root / "progress.json", {"phase": "resuming", "next_pos": first + 1})
+        else:
+            first, rows, snapshots = 0, [], None
+            atomic_json(root / "team_manifest.json", manifest)
         workers = self.pool.setup_workers()
         try:
+            if snapshots is not None:
+                restore_native_metadata(workers, snapshots, self._snapshots(workers))
+                if snapshots != self._snapshots(workers):
+                    raise ValueError("restored Skill Stores differ from the paused checkpoint")
+                log.record("EPISODE_RESUMED", None, last_completed_pos=first, next_pos=first + 1)
             if self.configure_workers is not None:
                 self.configure_workers(workers)
             registry = GlobalSkillRegistry(root / "registry")
             transfers = SkillTransferService(registry, workers, router)
             executor = TeamExecutor(workers, router, transfers, max_rounds=self.max_rounds)
-            return self._run(episode, tasks, executor, registry, root)
+            return self._run(episode, tasks, executor, registry, root, first, rows)
         finally:
             self.pool.teardown()
 
-    def _run(self, episode, tasks, executor, registry, root: Path):
+    def _run(self, episode, tasks, executor, registry, root: Path, first, rows):
         log = executor.log
         workers = executor.workers
         tracker = ProvenanceTracker(root, registry)
         frozen = None
-        rows = []
-        scored = {}
-        for start in range(0, 21, 3):
+        scored = {row["global_skill_id"]: row for row in rows if row["kind"] == "artifact"}
+        for start in range(first, 21, 3):
             block = tasks[start:start + 3]
             kind = block[0]["kind"]
             block_id = f"block-{start // 3 + 1}"
@@ -113,6 +133,8 @@ class TeamEpisodeScheduler:
                     except Exception as exc:
                         execution_error.add_note(f"Provenance sync also failed: {type(exc).__name__}")
                     raise execution_error
+                if self.ensure_healthy is not None:
+                    self.ensure_healthy()
                 if kind == "P":
                     log.record("PROBE_EXECUTED", task_id, task_run_id=run_id, stores_unchanged=True)
                     continue
@@ -128,6 +150,8 @@ class TeamEpisodeScheduler:
                         continue
                     worker = workers[agent]
                     worker.method.evolve_batch(local_traces, [], kind=kind, round_idx=block[0]["round"])
+                    if self.ensure_healthy is not None:
+                        self.ensure_healthy()
                     events = worker.method._last_evolution_events
                     log.record("NATIVE_MAINTENANCE", block[-1]["instance_id"], agent_id=agent, block_id=block_id,
                                ingest_event_ids=[event["event_id"] for event in events])
@@ -140,11 +164,18 @@ class TeamEpisodeScheduler:
                         if artifact.global_skill_id not in scored:
                             scored[artifact.global_skill_id] = self._artifact_row(executor, episode, artifact, kind)
                             rows.append(scored[artifact.global_skill_id])
+                            if self.ensure_healthy is not None:
+                                self.ensure_healthy()
                     for trace in local_traces:
                         for attr in ("_prompt_by_traj", "_retrieved_by_traj", "_task_by_traj"):
                             getattr(worker.method, attr).pop(id(trace), None)
                 atomic_json(root / "all_rows.json", rows)
             tracker.sync()
+            last = block[-1]["pos"]
+            if self.stop_after_pos == last:
+                log.record("EPISODE_PAUSED", None, last_completed_pos=last, next_pos=last + 1)
+                save_checkpoint(root, last, self._snapshots(workers))
+                return rows
         atomic_json(root / "progress.json", {"phase": "completed", "tasks_attempted": len(tasks)})
         return rows
 
@@ -188,6 +219,8 @@ class TeamEpisodeScheduler:
             "skills": worker.method._exchange.snapshot_store(),
             "ingests": len(read_jsonl(worker.method._exchange.evolution_path)),
             "imports": worker.imported_global_to_local.copy(),
+            "method_provenance": {key: list(value) for key, value in worker.method._prov.items()},
+            "last_learning": [worker.method._last_kind, worker.method._last_round],
         } for agent, worker in workers.items()}
 
     @staticmethod

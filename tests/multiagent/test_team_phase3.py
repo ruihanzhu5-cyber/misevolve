@@ -12,7 +12,7 @@ import pytest
 from misevolve import harness
 from misevolve.adapters.openclaw_runner import OpenClawRunner
 from misevolve.backbones import resolve_agent
-from misevolve.multiagent._io import read_jsonl
+from misevolve.multiagent._io import append_jsonl, read_jsonl
 from misevolve.multiagent.registry import GlobalSkillRegistry
 from misevolve.run import EPISODES_JSON
 from misevolve.team import (
@@ -236,9 +236,9 @@ def test_chain_connects_native_import_injection_and_explicit_invocation(tmp_path
         pool.teardown()
 
 
-@pytest.mark.parametrize("router_type", PROTOCOLS)
+@pytest.mark.parametrize(("router_type", "pause"), [(p, None) for p in PROTOCOLS] + [(ChainRouter, 6)])
 def test_complete_episode_same_scheduler_and_native_learning_isolation(
-    tmp_path, router_type, synthetic_llm, method_factory, monkeypatch,
+    tmp_path, router_type, pause, synthetic_llm, method_factory, monkeypatch,
 ):
     episode = coding_episode()
     runners = []
@@ -260,7 +260,7 @@ def test_complete_episode_same_scheduler_and_native_learning_isolation(
             if not hasattr(method, "_synthetic_configured"):
                 synthetic_llm(method)
                 method._synthetic_configured = True
-            learned.append(("ABC"[methods.index(method)], context["kind"], list(traces)))
+            learned.append(("ABC"[methods.index(method) % 3], context["kind"], list(traces)))
             return original(traces, outcomes, **context)
 
         monkeypatch.setattr(method, "evolve_batch", evolve)
@@ -268,10 +268,35 @@ def test_complete_episode_same_scheduler_and_native_learning_isolation(
 
     def judge(trace, _goal, _prompt, kind):
         judged.append((trace.final_text, kind))
+        if pause:
+            row = {"task_run_id": trace.raw["task_run_id"], "cost": 0.01}
+            append_jsonl(tmp_path / "model_calls.jsonl", row)
+            append_jsonl(tmp_path / "judge_results.jsonl", row)
         return harness.TaskOutcome(False, kind != "M")
 
     pool = TeamWorkerPool(tmp_path, runner_factory=runner_factory, method_factory=native_factory)
-    rows = TeamEpisodeScheduler(pool, router_type, judge=judge).run(episode)
+    rows = TeamEpisodeScheduler(pool, router_type, judge=judge, stop_after_pos=pause).run(episode)
+    if pause:
+        prefix = [row for row in rows if row["pos"] is not None]
+        assert len(prefix) == len(judged) == pause
+        journal = tmp_path / "team_events.jsonl"
+        before = journal.read_bytes()
+        ledgers = {name: (tmp_path / name).read_bytes() for name in ("model_calls.jsonl", "judge_results.jsonl")}
+        restored = TeamWorkerPool(tmp_path, runner_factory=runner_factory, method_factory=native_factory, resume=True)
+        journal.write_bytes(before + b"{}\n")
+        with pytest.raises(ValueError, match="evidence changed"):
+            TeamEpisodeScheduler(restored, router_type, judge=judge).run(episode)
+        assert len(judged) == pause and len(runners) == 3
+        journal.write_bytes(before)
+        rows = TeamEpisodeScheduler(restored, router_type, judge=judge).run(episode)
+        assert journal.read_bytes().startswith(before)
+        for name, prefix_bytes in ledgers.items():
+            ledger = tmp_path / name
+            assert ledger.read_bytes().startswith(prefix_bytes)
+            assert len({entry["task_run_id"] for entry in read_jsonl(ledger)}) == 21
+            assert len(read_jsonl(ledger)) == 21
+        assert [row for row in rows if row["pos"] is not None][:pause] == prefix
+        assert any(e["event_type"] == "EPISODE_RESUMED" and e["next_pos"] == 7 for e in read_jsonl(journal))
     task_rows = [r for r in rows if r["pos"] is not None]
     assert len(task_rows) == len(judged) == 21
     assert "".join(r["task_kind"] for r in task_rows) == "MMMBBBMMMBBBMMMBBBPPP"
@@ -279,11 +304,11 @@ def test_complete_episode_same_scheduler_and_native_learning_isolation(
         t["instance_id"] for t in sorted(episode["task_sequence"], key=lambda t: t["pos"])
     ]
     assert all(r["runner_success"] and r["agent"] == ("A" if r["task_kind"] == "M" else "C") for r in task_rows)
-    assert [len(r.sessions) for r in runners] == [21, 12, 12]
+    assert [sum(len(r.sessions) for r in runners[i::3]) for i in range(3)] == [21, 12, 12]
     assert len({s[3] for r in runners for s in r.sessions}) == 45
     assert all(r.closed == r.sessions for r in runners)
     assert len({method._store_dir for method in methods}) == 3
-    assert len({id(method.sdk) for method in methods}) == 3
+    assert len({id(method.sdk) for method in methods}) == len(methods)
     assert [(agent, kind) for agent, kind, _ in learned] == [("A", "M"), ("A", "B"), ("B", "B"), ("C", "B")] * 3
     for agent, _, traces in learned:
         assert len(traces) == 3
@@ -291,7 +316,8 @@ def test_complete_episode_same_scheduler_and_native_learning_isolation(
         assert f"PRIVATE_TOOL_RESULT_{agent}" in combined
         assert all(f"PRIVATE_TOOL_RESULT_{other}" not in combined for other in "ABC" if other != agent)
     malicious = [task["prompt"] for task in episode["task_sequence"] if task["kind"] == "M"]
-    assert all(prompt not in seen for runner in runners[1:] for *_, seen, _ in runner.received for prompt in malicious)
+    assert all(prompt not in seen for i, runner in enumerate(runners) if i % 3 != 0
+               for *_, seen, _ in runner.received for prompt in malicious)
     events = read_jsonl(tmp_path / "team_events.jsonl")
     assert sum(e["event_type"] == "FINAL_ANSWER" and e["agent_id"] == "C" for e in events) == 12
     assert sum(e["event_type"] == "SKILL_STORE_FROZEN" and e["after_pos"] == 18 for e in events) == 3
