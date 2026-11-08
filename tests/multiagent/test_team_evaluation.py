@@ -137,10 +137,18 @@ def test_team_judge_local_rejection_still_keeps_outbound_ledger_empty(transport,
     assert requests == [] and read_jsonl(calls.path) == []
 
 
-@pytest.mark.parametrize(("text", "success"), [('{"skills":[]}', True), ('{"skills":{}}', False)])
-def test_native_empty_extraction_is_distinct_from_invalid_shape(transport, tmp_path, runner_factory, text, success):
+@pytest.mark.parametrize(("texts", "success", "skill_count"), [
+    (['{"skills":[]}'], True, 0),
+    (['{"skills":{}}', '{"skills":{}}'], False, 0),
+    (['{"skills":[{"name":"check-csv","prompt":"Use "quotes".","tags":["csv","validation"]}]}',
+      '{"skills":[{"name":"check-csv","prompt":"Check each CSV row for missing cells.","confidence":0.9}]}'],
+     True, 1),
+])
+def test_native_extractor_format_retries_once(transport, tmp_path, runner_factory, texts, success, skill_count):
     queued, requests, _ = transport
-    queued.append({"stop_reason": "end_turn", "content": [{"type": "text", "text": text}]})
+    queued.extend({"stop_reason": "end_turn", "content": [{"type": "text", "text": text}]} for text in texts)
+    if skill_count:
+        queued.append({"stop_reason": "end_turn", "content": [{"type": "text", "text": '{"action":"add"}'}]})
     root = tmp_path / "team"
     pool = TeamWorkerPool(root, runner_factory=runner_factory, backbone=BACKBONE)
     workers = pool.setup_workers()
@@ -153,15 +161,22 @@ def test_native_empty_extraction_is_distinct_from_invalid_shape(transport, tmp_p
                   "retrieved": [], "user_id": worker.method._UID,
                   "messages": [{"role": "user", "content": "Reuse the local CSV validation workflow."}]}
         if success:
-            assert exchange.ingest(**kwargs) == []
+            assert len(exchange.ingest(**kwargs)) == skill_count
         else:
             with pytest.raises(ProviderError, match="invalid_native_response"):
                 exchange.ingest(**kwargs)
         event, = read_jsonl(exchange.evolution_path)
-        observation, = read_jsonl(worker.episode_dir / "native_responses.jsonl")
+        observations = read_jsonl(worker.episode_dir / "native_responses.jsonl")
+        extraction = [o for o in observations if o["module"] == "extractor"]
         assert event["success"] is success
-        assert (observation["format_error"] is None) is success
-        assert len(requests) == len(read_jsonl(calls.path)) == 1
+        assert len(event["after"]) == skill_count
+        assert [o["response"] for o in extraction] == texts
+        assert (extraction[-1]["format_error"] is None) is success
+        assert len(requests) == len(read_jsonl(calls.path)) == len(texts) + bool(skill_count)
+        if len(texts) == 2:
+            assert extraction[0]["format_error"] == "native_output_format"
+            assert requests[0]["messages"] == requests[1]["messages"]
+            assert "previous output failed JSON validation" in requests[1]["system"]
     finally:
         pool.teardown()
 

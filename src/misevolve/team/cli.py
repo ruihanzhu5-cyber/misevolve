@@ -34,6 +34,11 @@ from .router import ChainRouter, HierarchicalRouter, PeerToPeerRouter
 
 ROUTERS = {cls.protocol: cls for cls in (ChainRouter, HierarchicalRouter, PeerToPeerRouter)}
 NATIVE_MODULES = frozenset({"extractor", "maintainer"})
+_EXTRACTOR_FORMAT_RETRY = (
+    "Your previous output failed JSON validation. Regenerate the complete result from the same input. "
+    'Return one valid JSON object with a top-level "skills" array. Escape quotes and newlines in strings. '
+    'Use {"skills": []} only if the input contains no reusable skill. Omit prose and Markdown fences.'
+)
 
 
 class EpisodeCalls(ProviderCalls):
@@ -101,13 +106,30 @@ def _configure_native(workers, calls):
 
             def observe(module, system, text):
                 error = _native_format_error(module, system, text)
-                # The native Extractor can repair a draft. Keep both attempts and check the last one.
                 if module == "extractor" or error:
                     checks[module] = error
                 return error
 
             _trace_native(worker, calls, scope, worker.episode_dir / "native_responses.jsonl",
                           on_error=calls.stop, response_check=observe)
+            extractor = worker.method.sdk.extractor._llm
+            complete = extractor.complete
+
+            def complete_extractor(*, system=None, user="", temperature=0.0):
+                text = complete(system=system, user=user, temperature=temperature)
+                if not checks.get("extractor"):
+                    return text
+                # A malformed draft can look like a valid nested array to the native parser.
+                # Regenerate once from the original input before handing it to AutoSkill.
+                corrected_system = f"{system}\n\n{_EXTRACTOR_FORMAT_RETRY}" if system else _EXTRACTOR_FORMAT_RETRY
+                text = complete(system=corrected_system, user=user, temperature=temperature)
+                if checks.get("extractor"):
+                    error = ProviderError("native_output_format", category="invalid_native_response")
+                    calls.stop("extractor", error)
+                    raise error
+                return text
+
+            extractor.complete = complete_extractor
 
         def check_ingest(checks=checks):
             for module, error in checks.items():
@@ -122,11 +144,11 @@ def _configure_native(workers, calls):
 def _native_format_error(module, system, text):
     from autoskill.management.extraction import _candidate_from_obj
     from autoskill.management.maintenance import _json_from_llm_decision, _normalize_action
-    from autoskill.utils.json import json_from_llm_text
+    from autoskill.utils.json import _FENCE_RE, json_from_llm_text
 
     try:
         if module == "extractor":
-            parsed = json_from_llm_text(text)
+            parsed = json.loads(_FENCE_RE.sub("", text.strip()))
             skills = parsed.get("skills") if isinstance(parsed, dict) else parsed
             valid = isinstance(skills, list) and (not skills or any(
                 _candidate_from_obj(item, source=None) is not None for item in skills
@@ -173,6 +195,7 @@ def _run_episode(args, config, root):
     metadata = {key: config[key] for key in ("execution", "judge")}
     metadata["execution"] = {
         **metadata["execution"], "native_input_limit_bytes": calls.input_limit("extractor"),
+        "extractor_format_retries_per_ingest": 1,
         "task_timeout_seconds": TASK_TIMEOUT, "task_deadline_shared_across_members": True,
         "tool_default_timeout_seconds": TOOL_TIMEOUT_SECONDS, "tool_yield_ms": TOOL_YIELD_MS,
         "tool_timeout_overridable_by_native_exec": True, "process_tool_enabled": True,

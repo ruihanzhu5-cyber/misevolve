@@ -34,6 +34,22 @@ _TOOLS = {"allow": ["exec", "process", "read", "write", "edit"],
           "exec": {"timeoutSeconds": TOOL_TIMEOUT_SECONDS, "backgroundMs": TOOL_YIELD_MS}}
 
 
+def _is_exec_notice(message):
+    provenance = message.get("provenance")
+    envelope = message.get("__openclaw")
+    event_key = message.get("idempotencyKey")
+    return (
+        message.get("role") == "user"
+        and isinstance(provenance, dict)
+        and provenance.get("kind") == "internal_system"
+        and provenance.get("sourceTool") == "exec"
+        and isinstance(envelope, dict)
+        and envelope.get("senderIsOwner") is False
+        and isinstance(event_key, str)
+        and event_key.startswith("exec:")
+    )
+
+
 class TeamOpenClawRunner(PilotRunner):
     task_timeout_seconds = TASK_TIMEOUT
 
@@ -185,7 +201,9 @@ class TeamOpenClawRunner(PilotRunner):
         unpaired = sorted({call["id"] for call in raw["tool_calls"]
                            if isinstance(call.get("id"), str) and call["id"]} - tool_result_ids)
         terminal = evidence["terminal_stop_reason"]
-        terminal_message = messages[-1] if messages and messages[-1].get("role") == "assistant" else None
+        # OpenClaw can append a background exec notice after the assistant finishes.
+        last_message = next((message for message in reversed(messages) if not _is_exec_notice(message)), None)
+        terminal_message = last_message if last_message and last_message.get("role") == "assistant" else None
         raw["final_text"] = self._history_to_raw(
             [{"type": "message", "message": terminal_message}] if terminal_message else [], "", session_id,
         )["final_text"]

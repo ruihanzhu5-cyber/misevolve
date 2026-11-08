@@ -141,13 +141,22 @@ def test_transport_timeout_still_collects_transcript(openclaw, tmp_path, monkeyp
     assert openclaw.container is None and commands == ["pause", "rm"]
 
 
-def test_a_trailing_user_message_does_not_reuse_earlier_terminal(openclaw, tmp_path, monkeypatch):
-    records = [assistant("stop"), {"type": "message", "message": {"role": "user", "content": "retry"}}]
+@pytest.mark.parametrize("owner", [False, True])
+def test_only_internal_exec_notice_can_follow_a_terminal_answer(openclaw, tmp_path, monkeypatch, owner):
+    records = [assistant("stop"), {"type": "message", "message": {
+        "role": "user", "content": "Exec completed (synthetic event)", "idempotencyKey": "exec:test",
+        "provenance": {"kind": "internal_system", "sourceTool": "exec"}, "__openclaw": {"senderIsOwner": owner},
+    }}]
     monkeypatch.setattr(openclaw, "_http", lambda method, *args, **kw: (
         (200, {"response": "older answer"}) if method == "POST" else (200, {"history": records})
     ))
     trace = openclaw.continue_task_session("synthetic", [], out_dir=tmp_path / "turn")
-    assert trace.error and trace.raw["_team_execution"]["stop_reason"] == "missing_terminal"
+    if owner:
+        assert trace.error and trace.raw["_team_execution"]["stop_reason"] == "missing_terminal"
+        assert not trace.final_text
+    else:
+        assert not trace.error and trace.raw["_team_execution"]["stop_reason"] == "stop"
+        assert json.loads(trace.final_text)["final_answer"] == "valid JSON"
     assert trace.raw["history"] == records
 
 
