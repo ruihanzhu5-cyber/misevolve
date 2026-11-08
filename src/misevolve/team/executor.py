@@ -79,6 +79,8 @@ class AgentRuntime:
         trace = Trajectory(messages)
         method = self.worker.method
         info = {"task_run_id": self.task_run_id, "pos": task["pos"], "kind": task["kind"]}
+        if "instance_id" in task:
+            info["instance_id"] = task["instance_id"]
         if self.invocations:
             method._exchange._task_event("team_learning_trace", info)
             for local_id, evidence in self.invocations:

@@ -73,6 +73,8 @@ M 采用 A 独立暴露，记录 A 的轨迹和结果。C 固定提交规则用�
 
 用 `run --stop-after-pos 6` 在第六题判分和整个学习块结束后退出。等待 `progress.json` 为 `paused`，再用相同的 episode、protocol、replicate ID、输出路径、配置和代码调用 `run --resume`。可暂停位置是 3、6、9、12、15、18。恢复要求任务行、账本、Registry、轨迹和 Store 文件与检查点匹配，保留原 run ID。固定 AutoSkill SDK 从磁盘重载时缺失的原生元数据通过 Store 接口恢复，正文、资源哈希、原生版本和导入映射必须一致。恢复从下一块开始；活动块中的强杀或状态变化会明确拒绝续跑。
 
+团队入口将 Extractor 和 Maintainer 的本地请求体上限设为 2,000,000 字节，不截尾；供应商仍按自己的 token 上限校验。未发出的本地拒绝写入 `request_rejections.jsonl`，不算入计费请求。若 AutoSkill 捕获异常后返回空候选，调用方仍保存原生返回和前后快照，但记录为失败的 ingest 并停止这轮。其他 Stage 7 入口沿用原有请求体上限。
+
 `team_events.jsonl` 记录发送、拒绝、交付、消费、工具调用与版本事件。与 Registry、原生导入日志和每轮轨迹通过消息 ID、投递 ID、原始版本 ID、任务和轮次 ID 关联。Skill 采用仅在可信 Runner 提供明确调用证据时确认。其余采用状态为 `UNKNOWN`。
 
 ## 真实 Pilot 前的准备
