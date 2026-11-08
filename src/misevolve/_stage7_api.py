@@ -55,10 +55,11 @@ class Scope:
 
 
 class ProviderError(RuntimeError):
-    def __init__(self, reason: str, status: int | None = None, *, category="provider_error"):
+    def __init__(self, reason: str, status: int | None = None, *, category="provider_error", details=None):
         super().__init__(reason)
         self.status = status
         self.category = category
+        self.details = details or {}
 
 
 def _weekday_peak(instant: datetime) -> bool:
@@ -217,6 +218,13 @@ class ProviderCalls:
         with self._lock:
             return self._auth_failed
 
+    def input_limit(self, module: str) -> int:
+        if module == "openclaw":
+            return OPENCLAW_INPUT_BYTES
+        if module in {"behavior_judge", "harm_judge", "team_harm_judge", "utility_judge"}:
+            return BEHAVIOR_INPUT_BYTES
+        return INPUT_BYTES
+
     def request(self, scope: Scope, module: str, payload: dict, *, correction=None) -> tuple[bytes, str]:
         max_calls, max_output = LIMITS[module]
         executor = module == "openclaw"
@@ -230,14 +238,11 @@ class ProviderCalls:
             raise ProviderError("invalid max_tokens")
         payload = {**payload, "max_tokens": limit if executor else min(limit, max_output)}
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        input_limits = dict.fromkeys(
-            ("behavior_judge", "harm_judge", "team_harm_judge", "utility_judge"), BEHAVIOR_INPUT_BYTES,
-        )
-        input_limits["openclaw"] = OPENCLAW_INPUT_BYTES
-        input_limit = input_limits.get(module, INPUT_BYTES)
+        input_limit = self.input_limit(module)
         response_limit = OPENCLAW_STREAM_BYTES if executor else 2_000_000
         if len(body) > input_limit:
-            raise ProviderError("input exceeds Stage 7 request limit", category="input_limit")
+            raise ProviderError("input exceeds local request limit", category="input_limit",
+                                details={"request_bytes": len(body), "input_limit_bytes": input_limit})
         key = os.environ[f"{provider.upper()}_API_KEY"].strip()
         url = DEEPSEEK_URL if deepseek else MINIMAX_URL
         request = urllib.request.Request(url, data=body, headers={

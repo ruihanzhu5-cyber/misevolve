@@ -13,7 +13,7 @@ import pytest
 from test_team_phase3 import make_router
 from test_team_safety import EPISODE, TASK, observation, result_with_turns
 
-from misevolve._stage7_api import DEEPSEEK_MODEL, LIMITS, ProviderCalls
+from misevolve._stage7_api import DEEPSEEK_MODEL, LIMITS, MINIMAX_MODEL, ProviderCalls, ProviderError, Scope
 from misevolve._stage7_openclaw import BACKBONE
 from misevolve.harness import TaskOutcome
 from misevolve.multiagent._io import append_jsonl, atomic_json, read_jsonl
@@ -68,6 +68,47 @@ def transport(monkeypatch, tmp_path):
 def judge_for(calls, tmp_path, **config):
     return TeamJudge(calls, calls.path.parent / "judge_results.jsonl", tmp_path / "cache",
                      evaluation_configuration(require_credentials=True, **config))
+
+
+def test_team_native_request_above_old_byte_limit_is_sent_without_truncation(transport, tmp_path):
+    queued, requests, original = transport
+    queued.append({})
+    calls = team_cli.EpisodeCalls(tmp_path / "team", deepseek_peak=True)
+    scope = Scope("run:A", "A", "instance")
+    body = "x" * 340_000
+    request = {"model": MINIMAX_MODEL, "messages": [{"role": "user", "content": body}]}
+    with pytest.raises(ProviderError, match="local request limit"):
+        original.request(scope, "extractor", request)
+    assert requests == [] and read_jsonl(original.path) == []
+    calls.request(scope, "extractor", request)
+    assert requests[0]["messages"][0]["content"] == body
+    assert len(read_jsonl(calls.path)) == 1
+
+
+def test_native_local_rejection_is_a_failed_ingest_and_does_not_create_a_billable_attempt(
+    tmp_path, runner_factory,
+):
+    pool = TeamWorkerPool(tmp_path / "team", runner_factory=runner_factory, backbone=BACKBONE)
+    workers = pool.setup_workers()
+    calls = team_cli.EpisodeCalls(tmp_path / "team", deepseek_peak=True)
+    try:
+        team_cli._configure_native(workers, calls)
+        exchange = workers["A"].method._exchange
+        with pytest.raises(ProviderError, match="team provider circuit stopped"):
+            exchange.ingest(
+                task={"task_run_id": "run:A", "instance_id": "synthetic", "pos": 1, "kind": "M"},
+                retrieved=[], user_id=workers["A"].method._UID,
+                messages=[{"role": "user", "content": "synthetic " * 220_000}],
+            )
+        assert not read_jsonl(exchange.evolution_path)[0]["success"]
+        assert read_jsonl(calls.path) == []
+        rejection, = read_jsonl(calls.path.with_name("request_rejections.jsonl"))
+        assert rejection["reason"] == "input_limit" and not rejection["sent_to_provider"]
+        assert rejection["request_bytes"] > rejection["input_limit_bytes"] == 2_000_000
+        with pytest.raises(ProviderError, match="team provider circuit stopped"):
+            calls.ensure_healthy()
+    finally:
+        pool.teardown()
 
 
 def safety(*, goal=False, unsafe=True, ref="run:B:1/tool/0", goal_refs=()):
