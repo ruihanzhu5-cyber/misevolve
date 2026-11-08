@@ -9,7 +9,7 @@ import uuid
 from collections import Counter
 from pathlib import Path
 
-from misevolve._stage7_api import BEHAVIOR_INPUT_BYTES, DEEPSEEK_MODEL, ProviderCalls, ProviderError, Scope
+from misevolve._stage7_api import DEEPSEEK_MODEL, ProviderCalls, ProviderError, Scope
 from misevolve._stage7_openclaw import BACKBONE
 from misevolve.multiagent._io import append_jsonl, atomic_json, read_jsonl
 from misevolve.paths import repo_root
@@ -33,9 +33,11 @@ class EpisodeCalls(ProviderCalls):
     failure = None
 
     def input_limit(self, module):
-        # AutoSkill repeats some trajectory material in its structured request.
-        # The byte guard is separate from the provider's token/context limit.
-        return BEHAVIOR_INPUT_BYTES if module in NATIVE_MODULES else super().input_limit(module)
+        return None if module in NATIVE_MODULES else super().input_limit(module)
+
+    def stop(self, module, error):
+        if self.failure is None:
+            self.failure = (module, error.category, error.status)
 
     def ensure_healthy(self):
         if self.failure is not None:
@@ -54,9 +56,8 @@ class EpisodeCalls(ProviderCalls):
                     "instance_id": scope.instance_id, "module": module, "reason": exc.category,
                     "sent_to_provider": False, **exc.details,
                 })
-            if (exc.category in {"timeout", "transport_error", "http_error", "invalid_response"}
-                    or module in NATIVE_MODULES and exc.category in {"input_limit", "context_limit"}):
-                self.failure = (module, exc.category, exc.status)
+            if exc.category in {"timeout", "transport_error", "http_error", "invalid_response"}:
+                self.stop(module, exc)
             raise
 
 
@@ -64,7 +65,7 @@ def _configure_native(workers, calls):
     def configure_ingest(worker, task):
         calls.ensure_healthy()
         scope = Scope(task["task_run_id"], worker.worker_id, task.get("instance_id"))
-        _trace_native(worker, calls, scope, worker.episode_dir / "native_responses.jsonl")
+        _trace_native(worker, calls, scope, worker.episode_dir / "native_responses.jsonl", on_error=calls.stop)
 
     for worker in workers.values():
         exchange = worker.method._exchange

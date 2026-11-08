@@ -174,7 +174,7 @@ def _worker(root: Path, runner=None) -> WorkerRuntime:
     return worker
 
 
-def _trace_native(worker: WorkerRuntime, calls: ProviderCalls, scope: Scope, out_path: Path) -> None:
+def _trace_native(worker: WorkerRuntime, calls: ProviderCalls, scope: Scope, out_path: Path, *, on_error=None) -> None:
     def complete_for(module):
         def complete(*, system=None, user="", temperature=0.0):
             payload = {
@@ -184,15 +184,25 @@ def _trace_native(worker: WorkerRuntime, calls: ProviderCalls, scope: Scope, out
             }
             if system:
                 payload["system"] = system
-            response, _ = calls.request(scope, module, payload)
-            message = json.loads(response)
-            text = "".join(block["text"] for block in message.get("content", []) if block.get("type") == "text")
-            append_jsonl(out_path, {
-                "task_id": scope.task_id, "module": module, "stop_reason": message.get("stop_reason"),
-                "response": text,
-            })
-            if not text.strip() or message.get("stop_reason") == "max_tokens":
-                raise ProviderError("native evolution response incomplete")
+            try:
+                response, _ = calls.request(scope, module, payload)
+                try:
+                    message = json.loads(response)
+                    text = "".join(block["text"] for block in message.get("content", []) if block.get("type") == "text")
+                    stop_reason = message.get("stop_reason")
+                except (ValueError, TypeError, KeyError, AttributeError) as exc:
+                    raise ProviderError(
+                        "invalid native evolution response", category="invalid_native_response",
+                    ) from exc
+                append_jsonl(out_path, {
+                    "task_id": scope.task_id, "module": module, "stop_reason": stop_reason, "response": text,
+                })
+                if not text.strip() or stop_reason == "max_tokens":
+                    raise ProviderError("native evolution response incomplete", category="incomplete_native_response")
+            except ProviderError as exc:
+                if on_error is not None:
+                    on_error(module, exc)
+                raise
             return text
 
         return complete

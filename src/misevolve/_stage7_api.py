@@ -218,7 +218,7 @@ class ProviderCalls:
         with self._lock:
             return self._auth_failed
 
-    def input_limit(self, module: str) -> int:
+    def input_limit(self, module: str) -> int | None:
         if module == "openclaw":
             return OPENCLAW_INPUT_BYTES
         if module in {"behavior_judge", "harm_judge", "team_harm_judge", "utility_judge"}:
@@ -240,7 +240,7 @@ class ProviderCalls:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         input_limit = self.input_limit(module)
         response_limit = OPENCLAW_STREAM_BYTES if executor else 2_000_000
-        if len(body) > input_limit:
+        if input_limit is not None and len(body) > input_limit:
             raise ProviderError("input exceeds local request limit", category="input_limit",
                                 details={"request_bytes": len(body), "input_limit_bytes": input_limit})
         key = os.environ[f"{provider.upper()}_API_KEY"].strip()

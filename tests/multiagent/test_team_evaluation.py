@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import copy
+import io
 import json
 import sys
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.error import HTTPError
 
 import pytest
 from test_team_phase3 import make_router
@@ -36,11 +38,12 @@ def transport(monkeypatch, tmp_path):
         headers = {"Content-Type": "application/json", "request-id": "synthetic"}
 
         def __init__(self, value, finish):
-            self.body = json.dumps({
+            payload = value if "stop_reason" in value else {
                 "model": DEEPSEEK_MODEL, "choices": [
                     {"finish_reason": finish, "message": {"content": json.dumps(value)}},
                 ], "usage": {"prompt_tokens": 19, "completion_tokens": 11, "prompt_cache_hit_tokens": 0},
-            }).encode()
+            }
+            self.body = json.dumps(payload).encode()
 
         def read(self, size):
             return self.body[:size]
@@ -70,45 +73,68 @@ def judge_for(calls, tmp_path, **config):
                      evaluation_configuration(require_credentials=True, **config))
 
 
-def test_team_native_request_above_old_byte_limit_is_sent_without_truncation(transport, tmp_path):
+@pytest.mark.parametrize("module", ["extractor", "maintainer"])
+def test_team_native_request_above_old_byte_limit_is_sent_without_truncation(transport, tmp_path, module):
     queued, requests, original = transport
     queued.append({})
     calls = team_cli.EpisodeCalls(tmp_path / "team", deepseek_peak=True)
     scope = Scope("run:A", "A", "instance")
-    body = "x" * 340_000
+    body = "x" * 2_100_000
     request = {"model": MINIMAX_MODEL, "messages": [{"role": "user", "content": body}]}
     with pytest.raises(ProviderError, match="local request limit"):
-        original.request(scope, "extractor", request)
+        original.request(scope, module, request)
     assert requests == [] and read_jsonl(original.path) == []
-    calls.request(scope, "extractor", request)
+    calls.request(scope, module, request)
+    assert calls.input_limit(module) is None
     assert requests[0]["messages"][0]["content"] == body
     assert len(read_jsonl(calls.path)) == 1
 
 
-def test_native_local_rejection_is_a_failed_ingest_and_does_not_create_a_billable_attempt(
-    tmp_path, runner_factory,
+@pytest.mark.parametrize("failure", ["context_limit", "incomplete_native_response", "invalid_native_response"])
+def test_native_failure_swallowed_by_sdk_is_reported_as_failed_ingest(
+    transport, tmp_path, runner_factory, failure,
 ):
+    queued, requests, _ = transport
+    if failure == "context_limit":
+        queued.append(HTTPError("https://example.test", 400, "bad request", {},
+                                io.BytesIO(b'{"message":"context_length_exceeded"}')))
+    elif failure == "incomplete_native_response":
+        queued.append({"stop_reason": "max_tokens", "content": [{"type": "text", "text": '{"skills":'}]})
+    else:
+        queued.append({"stop_reason": "end_turn", "content": [{"type": "text"}]})
     pool = TeamWorkerPool(tmp_path / "team", runner_factory=runner_factory, backbone=BACKBONE)
     workers = pool.setup_workers()
     calls = team_cli.EpisodeCalls(tmp_path / "team", deepseek_peak=True)
     try:
         team_cli._configure_native(workers, calls)
         exchange = workers["A"].method._exchange
-        with pytest.raises(ProviderError, match="team provider circuit stopped"):
+        with pytest.raises(ProviderError, match=failure):
             exchange.ingest(
                 task={"task_run_id": "run:A", "instance_id": "synthetic", "pos": 1, "kind": "M"},
                 retrieved=[], user_id=workers["A"].method._UID,
-                messages=[{"role": "user", "content": "synthetic " * 220_000}],
+                messages=[{"role": "user", "content": "Use this repeatable approach to validate a CSV."}],
             )
         assert not read_jsonl(exchange.evolution_path)[0]["success"]
-        assert read_jsonl(calls.path) == []
-        rejection, = read_jsonl(calls.path.with_name("request_rejections.jsonl"))
-        assert rejection["reason"] == "input_limit" and not rejection["sent_to_provider"]
-        assert rejection["request_bytes"] > rejection["input_limit_bytes"] == 2_000_000
+        assert len(requests) == len(read_jsonl(calls.path)) == 1
+        assert not calls.path.with_name("request_rejections.jsonl").exists()
         with pytest.raises(ProviderError, match="team provider circuit stopped"):
             calls.ensure_healthy()
     finally:
         pool.teardown()
+
+
+def test_team_judge_local_rejection_still_keeps_outbound_ledger_empty(transport, tmp_path):
+    _, requests, _ = transport
+    calls = team_cli.EpisodeCalls(tmp_path / "team", deepseek_peak=True)
+    scope = Scope("run:judge", "team", "instance")
+    with pytest.raises(ProviderError, match="local request limit"):
+        calls.request(scope, "team_harm_judge", {"model": DEEPSEEK_MODEL, "messages": [
+            {"role": "user", "content": "x" * 2_100_000},
+        ]})
+    rejection, = read_jsonl(calls.path.with_name("request_rejections.jsonl"))
+    assert rejection["reason"] == "input_limit" and not rejection["sent_to_provider"]
+    assert rejection["request_bytes"] > rejection["input_limit_bytes"] == 2_000_000
+    assert requests == [] and read_jsonl(calls.path) == []
 
 
 def safety(*, goal=False, unsafe=True, ref="run:B:1/tool/0", goal_refs=()):
