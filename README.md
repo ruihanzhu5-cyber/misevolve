@@ -1,3 +1,6 @@
+> [!NOTE]
+> **Multi-agent research extension (xskill-stage7).** See the [team skill revision and risk propagation project README](docs/team-skill-risk/README.md) for the framework, two pilots, evidence archives, and evaluation plan.
+
 <h2 align="center">Practice Makes Unsafe: Skill Misevolution in Self-Improving LLM Agents</h2>
 <p align="center"><b>MisEvolve — SkillMisevo-Gym · SkillMisevo-Bench · SafeEvolve</b></p>
 

@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 552" width="1280" height="552" role="img" aria-labelledby="title desc">
+<title id="title">From one persistent skill library to team skill propagation</title>
+<desc id="desc">Three rows contrast the original single-agent benchmark with Stage 7.2 cross-agent revision and Phase 3 transfer of a newly learned skill.</desc>
+<defs><marker id="arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="8" markerHeight="8" orient="auto"><path d="M1 1l9 5-9 5" fill="none" stroke="#456073" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<style>text{font-family:Arial,Helvetica,sans-serif;fill:#172c3b}.title{font-size:27px;font-weight:700}.sub{font-size:15px;fill:#486073}.panel{font-size:17px;font-weight:700}.tag{font-size:13px;fill:#486073}.node{font-size:18px;font-weight:700}.body{font-size:14px;fill:#364f61}.edge{font-size:12px;fill:#486073}.foot{font-size:13px;fill:#364f61}</style>
+<rect width="1280" height="552" rx="18" fill="#ffffff"/>
+
+<text x="29" y="38" text-anchor="start" class="title">A reusable skill can cross tasks and team boundaries</text>
+<text x="30" y="62" text-anchor="start" class="sub">Two pilot observations separate version transfer from downstream behavior.</text>
+<rect x="28" y="79" width="1224" height="140" rx="12" fill="#fcfdff" stroke="#d6e1e8"/>
+<text x="50" y="104" text-anchor="start" class="panel">(a) Prior setup</text>
+<text x="50" y="127" text-anchor="start" class="tag">Practice Makes Unsafe</text>
+<rect x="270" y="92" width="268" height="86" rx="11" fill="#f5f8fc" stroke="#bdcdd9" stroke-width="1.4"/>
+<text x="286" y="117" text-anchor="start" class="node">Task history</text>
+<text x="286" y="140" text-anchor="start" class="body">One agent runs M and B tasks</text>
+<text x="286" y="159" text-anchor="start" class="body">Task sessions are reset</text>
+<rect x="608" y="92" width="268" height="86" rx="11" fill="#f5f8fc" stroke="#bdcdd9" stroke-width="1.4"/>
+<text x="624" y="117" text-anchor="start" class="node">One persistent library</text>
+<text x="624" y="140" text-anchor="start" class="body">The same learner writes</text>
+<text x="624" y="159" text-anchor="start" class="body">and revises its skills</text>
+<rect x="946" y="92" width="268" height="86" rx="11" fill="#f5f8fc" stroke="#bdcdd9" stroke-width="1.4"/>
+<text x="962" y="117" text-anchor="start" class="node">Later probe</text>
+<text x="962" y="140" text-anchor="start" class="body">Same agent, fresh session</text>
+<text x="962" y="159" text-anchor="start" class="body">Frozen skill library</text>
+<path d="M545 136h56" fill="none" stroke="#456073" stroke-width="1.7" marker-end="url(#arrow)"/>
+<text x="573" y="123" text-anchor="middle" class="edge">learn</text>
+<path d="M883 136h56" fill="none" stroke="#456073" stroke-width="1.7" marker-end="url(#arrow)"/>
+<text x="911" y="123" text-anchor="middle" class="edge">reuse</text>
+<text x="270" y="200" text-anchor="start" class="foot">Measures cross-task carryover within one learner.</text>
+<rect x="28" y="227" width="1224" height="140" rx="12" fill="#fcfdff" stroke="#d6e1e8"/>
+<text x="50" y="252" text-anchor="start" class="panel">(b) Transfer + revision</text>
+<text x="50" y="275" text-anchor="start" class="tag">Stage 7.2 · observed</text>
+<rect x="270" y="240" width="268" height="86" rx="11" fill="#fff3e9" stroke="#d39462" stroke-width="1.4"/>
+<text x="286" y="265" text-anchor="start" class="node">A stores v0.1.2</text>
+<text x="286" y="288" text-anchor="start" class="body">Environment diagnostics</text>
+<text x="286" y="307" text-anchor="start" class="body">Content risk: 4/5</text>
+<rect x="608" y="240" width="268" height="86" rx="11" fill="#fff3e9" stroke="#d39462" stroke-width="1.4"/>
+<text x="624" y="265" text-anchor="start" class="node">B revises to v0.1.3</text>
+<text x="624" y="288" text-anchor="start" class="body">After benign task B04</text>
+<text x="624" y="307" text-anchor="start" class="body">Content risk stays 4/5</text>
+<rect x="946" y="240" width="268" height="86" rx="11" fill="#fff3e9" stroke="#d39462" stroke-width="1.4"/>
+<text x="962" y="265" text-anchor="start" class="node">C receives v0.1.3</text>
+<text x="962" y="288" text-anchor="start" class="body">Retrieved and injected on B10–B12</text>
+<text x="962" y="307" text-anchor="start" class="body">P20 loads the frozen library</text>
+<path d="M545 284h56" fill="none" stroke="#456073" stroke-width="1.7" marker-end="url(#arrow)"/>
+<text x="573" y="271" text-anchor="middle" class="edge">A → B</text>
+<path d="M883 284h56" fill="none" stroke="#456073" stroke-width="1.7" marker-end="url(#arrow)"/>
+<text x="911" y="271" text-anchor="middle" class="edge">B → C</text>
+<text x="270" y="348" text-anchor="start" class="foot">The same lineage reaches C. The C → D transfer has an empty selection.</text>
+<rect x="28" y="375" width="1224" height="140" rx="12" fill="#fcfdff" stroke="#d6e1e8"/>
+<text x="50" y="400" text-anchor="start" class="panel">(c) Loss of a safeguard</text>
+<text x="50" y="423" text-anchor="start" class="tag">Phase 3 · observed</text>
+<rect x="270" y="388" width="268" height="86" rx="11" fill="#ecf6f7" stroke="#91b5b9" stroke-width="1.4"/>
+<text x="286" y="413" text-anchor="start" class="node">B06 task succeeds</text>
+<text x="286" y="436" text-anchor="start" class="body">B masks credential-like values</text>
+<text x="286" y="455" text-anchor="start" class="body">in the implemented workflow</text>
+<rect x="608" y="388" width="268" height="86" rx="11" fill="#fff3e9" stroke="#d39462" stroke-width="1.4"/>
+<text x="624" y="413" text-anchor="start" class="node">B writes a new skill</text>
+<text x="624" y="436" text-anchor="start" class="body">Masking is not explicit</text>
+<text x="624" y="455" text-anchor="start" class="body">Content risk: 4/5</text>
+<rect x="946" y="388" width="268" height="86" rx="11" fill="#fff3e9" stroke="#d39462" stroke-width="1.4"/>
+<text x="962" y="413" text-anchor="start" class="node">C receives the new skill</text>
+<text x="962" y="436" text-anchor="start" class="body">Retrieved and injected on P20/P21</text>
+<text x="962" y="455" text-anchor="start" class="body">Actual use remains unconfirmed</text>
+<path d="M545 432h56" fill="none" stroke="#456073" stroke-width="1.7" marker-end="url(#arrow)"/>
+<text x="573" y="419" text-anchor="middle" class="edge">extract</text>
+<path d="M883 432h56" fill="none" stroke="#456073" stroke-width="1.7" marker-end="url(#arrow)"/>
+<text x="911" y="419" text-anchor="middle" class="edge">B → C</text>
+<text x="270" y="496" text-anchor="start" class="foot">A separate B-authored skill propagates. The A-derived revision is not imported by C.</text>
+<text x="30" y="537" text-anchor="start" class="foot">Orange: artifact rated high risk. Arrows indicate recorded extraction, version transfer, or the prior setup; they do not attribute harm.</text>
+</svg>
