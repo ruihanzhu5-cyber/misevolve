@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import stat
 import subprocess
 import time
@@ -265,9 +266,20 @@ def _native_check(calls, run_dir):
         worker.method.teardown()
 
 
+def _judge_diagnostic(response):
+    text = response.decode("utf-8", errors="replace") if isinstance(response, bytes) else str(response)
+    for name, value in os.environ.items():
+        if value and re.search(r"(?:^|_)(?:API_KEY|TOKEN|PASSWORD|SECRET)$", name.upper()):
+            text = text.replace(value, "[REDACTED]")
+    return re.sub(r'''(?im)((?:authorization|x-api-key|api_key|password)["']?\s*[:=]\s*["']?)'''
+                  r'''(?:bearer\s+)?[^\s,"'}]+''', r'\1[REDACTED]', text)
+
+
 def _judge(calls, scope, module, prompt, output_path, *, artifact_id=None, detailed_artifact=False, audit=None):
     status = "provider_error"
     finish_reason = None
+    response = None
+    validation_error = None
     ledger_start = len(read_jsonl(calls.path)) if audit is not None else 0
     try:
         response, _ = calls.request(scope, module, {
@@ -329,7 +341,11 @@ def _judge(calls, scope, module, prompt, output_path, *, artifact_id=None, detai
     except ProviderError as exc:
         status = exc.category
         raise
+    except ValueError as exc:
+        validation_error = str(exc)
+        raise
     except (KeyError, TypeError, IndexError, AttributeError) as exc:
+        validation_error = f"{type(exc).__name__}: {exc}"
         raise ValueError("invalid judge response schema") from exc
     finally:
         if audit is not None:
@@ -340,6 +356,17 @@ def _judge(calls, scope, module, prompt, output_path, *, artifact_id=None, detai
                 {"call_id": row["call_id"], "attempt": row["attempt"], "cost": row.get("cost")}
                 for row in records
             ], response_model=records[-1].get("response_model") if records else None)
+            if response is not None:
+                diagnostic_id = uuid.uuid4().hex
+                diagnostic_path = output_path.parent / "judge_responses" / f"{diagnostic_id}.json"
+                atomic_json(diagnostic_path, {
+                    "task_id": scope.task_id, "module": module, "status": status,
+                    "response": _judge_diagnostic(response), "validation_error": _judge_diagnostic(validation_error)
+                    if validation_error else None, "ledger_refs": audit["ledger_refs"],
+                    "input_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
+                })
+                audit["response_ref"] = diagnostic_path.relative_to(output_path.parent).as_posix()
+                audit["validation_error"] = _judge_diagnostic(validation_error) if validation_error else None
         append_jsonl(output_path, {
             "run_id": output_path.parent.name, "task_id": scope.task_id, "module": module,
             "global_skill_id": artifact_id, "status": status, "verdict": verdict if status == "ok" else None,

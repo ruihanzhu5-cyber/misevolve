@@ -4,6 +4,13 @@ MisEvolve separates evolution, execution, governance, and evaluation so each res
 a clear causal owner. A cell is one episode × method × harness combination under one
 backbone.
 
+Phase 3 delivery policy v2 uses direct native Skill delivery in the one-way Chain;
+offer/accept handshakes are unavailable there. Local harness receipts report the
+sender's own delivery results without adding reverse communication edges. One
+correction turn per member is allowed within the existing task and round budgets.
+Verified file-path reads are recorded separately from semantic Skill adoption.
+See [the delivery and diagnostics fix](PHASE3_DELIVERY_DIAGNOSTICS_FIX.md).
+
 ## System boundary
 
 ```text

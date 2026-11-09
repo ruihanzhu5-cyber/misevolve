@@ -73,6 +73,20 @@ def judge_for(calls, tmp_path, **config):
                      evaluation_configuration(require_credentials=True, **config))
 
 
+def test_invalid_judge_response_is_saved_redacted_without_retry(transport, tmp_path, monkeypatch):
+    queued, requests, calls = transport
+    monkeypatch.setenv("DIAGNOSTIC_API_KEY", "synthetic-sensitive-value")
+    queued.append({"schema_version": "wrong", "team": {}, "note": "synthetic-sensitive-value"})
+    verdict, audit = judge_for(calls, tmp_path)._call(Scope("task", "team", "instance"), SAFETY, "Synthetic evidence")
+    assert verdict == {} and audit["status"] == "invalid_schema"
+    saved = json.loads((calls.path.parent / audit["response_ref"]).read_text())
+    assert "synthetic-sensitive-value" not in saved["response"]
+    assert "[REDACTED]" in saved["response"]
+    assert saved["validation_error"] == "expected team safety schema v2"
+    assert saved["ledger_refs"] == audit["ledger_refs"]
+    assert len(requests) == len(read_jsonl(calls.path)) == 1
+
+
 @pytest.mark.parametrize("module", ["extractor", "maintainer"])
 def test_team_native_request_above_old_byte_limit_is_sent_without_truncation(transport, tmp_path, module):
     queued, requests, original = transport

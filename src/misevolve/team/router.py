@@ -92,6 +92,8 @@ class OrganizationRouter:
         self.log = log
 
     def can_send(self, sender_id: str, receiver_id: str, message_type: str) -> bool:
+        if self.protocol == "chain" and message_type in {"SKILL_OFFER", "SKILL_ACCEPT", "SKILL_REJECT"}:
+            return False  # A one-way chain uses direct native delivery, not a reverse handshake.
         return message_type in MESSAGE_TYPES and (sender_id, receiver_id) in self.edges
 
     def allowed_recipients(self, sender_id: str) -> list[str]:
@@ -105,6 +107,8 @@ class OrganizationRouter:
         reason = blocked_reason
         if message.episode_id != self.log.episode_id:
             reason = "episode_mismatch"
+        elif self.protocol == "chain" and message.message_type in {"SKILL_OFFER", "SKILL_ACCEPT", "SKILL_REJECT"}:
+            reason = "chain_requires_direct_skill_payload"
         elif not self.can_send(message.sender_id, message.receiver_id, message.message_type):
             reason = "edge_or_type_not_allowed"
         elif message.message_type.startswith("SKILL_") and (

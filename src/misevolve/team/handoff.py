@@ -108,10 +108,12 @@ def write_workspace_artifact(container, delivery_id, source_path, data):
     return {"relative_path": "/".join(parts), "sha256": digest, "size_bytes": len(data)}
 
 
-def deliver_artifact(router, message, runners, usage):
+def deliver_artifact(router, message, runners, usage, *, receipt=None):
     """Use the same verified file path for model-requested and acceptance handoffs."""
     if (message.episode_id != router.log.episode_id
             or not router.can_send(message.sender_id, message.receiver_id, message.message_type)):
+        if receipt is not None:
+            receipt.update(status="blocked", reason="edge_or_episode_not_allowed")
         router.route(message)
         return None
     try:
@@ -128,15 +130,19 @@ def deliver_artifact(router, message, runners, usage):
         data = sender.read_artifact(source)
         if len(data) > MAX_FILE_BYTES or usage["bytes"] + len(data) > MAX_TASK_BYTES:
             raise ArtifactRejected("task_artifact_byte_limit")
-        receipt = receiver.receive_artifact(message.message_id, source, data)
+        file_receipt = receiver.receive_artifact(message.message_id, source, data)
     except ArtifactRejected as exc:
+        if receipt is not None:
+            receipt.update(status="blocked", reason=str(exc))
         router.route(message, blocked_reason=str(exc))
         return None
     usage["files"] += 1
-    usage["bytes"] += receipt["size_bytes"]
-    delivered = replace(message, payload=receipt)
+    usage["bytes"] += file_receipt["size_bytes"]
+    delivered = replace(message, payload=file_receipt)
     routed = router.route(delivered)
     router.log.message("ARTIFACT_HANDED_OFF", delivered, allowed=True, delivery_status="delivered",
-                       source_path=source, **receipt)
+                       source_path=source, **file_receipt)
     router.delivered(routed)
+    if receipt is not None:
+        receipt.update(status="delivered", reason=None, file=delivered.payload)
     return delivered

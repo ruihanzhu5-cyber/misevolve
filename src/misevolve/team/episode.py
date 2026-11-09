@@ -15,7 +15,8 @@ from .assessment import assess_task, behavior_summary
 from .checkpoint import BOUNDARIES, restore_native_metadata
 from .checkpoint import load as load_checkpoint
 from .checkpoint import save as save_checkpoint
-from .executor import TeamExecutor, TeamTaskExecutionError, TeamWorkerPool
+from .executor import DELIVERY_CORRECTION_TURNS, TeamExecutor, TeamTaskExecutionError, TeamWorkerPool
+from .handoff import MAX_FILE_BYTES, MAX_TASK_BYTES, MAX_TASK_FILES
 from .router import AGENTS, TeamEventLogger
 from .skills import SkillTransferService
 
@@ -59,6 +60,11 @@ class TeamEpisodeScheduler:
             "episode_id": episode_id, "communication_protocol": router.protocol, "edges": sorted(router.edges),
             "agents": AGENTS, "max_rounds": self.max_rounds, "exposure_submitter": "A", "team_submitter": "C",
             "probe_policy": "frozen_local_native_search_no_import",
+            "delivery_policy": {"version": 2, "chain_skill_transfer": "direct_native_payload_no_handshake",
+                                "correction_turns_per_member": DELIVERY_CORRECTION_TURNS,
+                                "receipt_channel": "local_harness", "artifact_max_files": MAX_TASK_FILES,
+                                "artifact_max_bytes": MAX_TASK_BYTES, "artifact_max_file_bytes": MAX_FILE_BYTES},
+            "skill_read_evidence": "paired_successful_read_tool_result_not_semantic_adoption",
             "event_journal": "team_events.jsonl", "registry": "registry",
             "behavior_summary": "behavior_summary.json",
             "assessment_schema_version": getattr(self.judge, "schema_version", 1),

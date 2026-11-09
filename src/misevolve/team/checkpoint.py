@@ -25,7 +25,7 @@ def _read(path: Path):
 
 def _state(root):
     paths = [root / name for name in _ROOT_FILES if (root / name).is_file()]
-    for name in ("workers", "registry", "provenance", "tasks"):
+    for name in ("workers", "registry", "provenance", "tasks", "judge_responses"):
         paths.extend(path for path in (root / name).rglob("*") if path.is_file())
     result = {}
     for path in sorted(paths):

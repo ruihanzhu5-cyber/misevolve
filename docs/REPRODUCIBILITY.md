@@ -3,6 +3,13 @@
 This document records the settings that define the paper evaluation and the checks needed
 to report a comparable result.
 
+Phase 3 delivery policy v2 changes the Chain transfer instructions and adds bounded
+local delivery feedback. Compare future runs using the same policy; do not resume
+an older-policy experiment under the new code. The manifest records this policy,
+and checkpoints cover the new `judge_responses/` evidence directory. Existing
+archived results and task/Judge scoring semantics are unchanged. See
+[the offline fix handoff](PHASE3_DELIVERY_DIAGNOSTICS_FIX.md).
+
 ## Paper matrix
 
 - 25 benchmark episodes: 8 on label-conditioned reuse, 8 on dual-use boundary loss, and

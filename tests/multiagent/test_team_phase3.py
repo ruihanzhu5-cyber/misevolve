@@ -244,7 +244,10 @@ def test_chain_routes_one_fenced_response_with_optional_prose(tmp_path, ambiguou
             agent = self.active[2]
             if agent == "A":
                 payload = json.loads(trace.final_text)
-                payload["actions"].append(action("C", "SUBTASK", text="Skip B."))
+                # Keep testing edge rejection; the new local receipt lets A drop
+                # the rejected action instead of submitting it again on correction.
+                if '"delivery_receipts"' not in prompt:
+                    payload["actions"].append(action("C", "SUBTASK", text="Skip B."))
                 trace.final_text = f"```json\n{json.dumps(payload)}\n```"
                 if ambiguous:
                     trace.final_text += '\n```json\n{"actions": []}\n```'

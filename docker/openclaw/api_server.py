@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import random
+import re
 from datetime import datetime
 from functools import wraps
 from typing import Dict, List, Optional
@@ -184,7 +185,18 @@ async def count_session_messages(session_file: str) -> int:
         return 0
 
 
-@async_retry(max_attempts=int(os.environ.get("MISEVOLVE_OPENCLAW_PROMPT_ATTEMPTS", "5")), base_delay=1.0)
+def _diagnostic_stream(data):
+    text = data.decode("utf-8", errors="replace")
+    for name, value in os.environ.items():
+        if value and re.search(r"(?:^|_)(?:API_KEY|TOKEN|PASSWORD|SECRET)$", name.upper()):
+            text = text.replace(value, "[REDACTED]")
+    text = re.sub(r'''(?im)((?:authorization|x-api-key|api_key|password)["']?\s*[:=]\s*["']?)'''
+                  r'''(?:bearer\s+)?[^\s,"'}]+''', r'\1[REDACTED]', text)
+    return {"text": text[-16384:], "original_bytes": len(data), "truncated": len(text) > 16384}
+
+
+@async_retry(max_attempts=1 if STAGE7 else int(os.environ.get("MISEVOLVE_OPENCLAW_PROMPT_ATTEMPTS", "5")),
+             base_delay=1.0)
 async def send_prompt_to_openclaw(session_id: str, prompt: str) -> Dict:
     """Send a prompt to OpenClaw via CLI"""
     try:
@@ -198,6 +210,13 @@ async def send_prompt_to_openclaw(session_id: str, prompt: str) -> Dict:
         stdout, stderr = await process.communicate()
 
         if process.returncode != 0:
+            if STAGE7:
+                raise HTTPException(status_code=500, detail={
+                    "error": "openclaw_process_exit", "returncode": process.returncode,
+                    "signal": -process.returncode if process.returncode < 0 else None,
+                    "pid": process.pid, "session_id": session_id,
+                    "stdout": _diagnostic_stream(stdout), "stderr": _diagnostic_stream(stderr),
+                })
             error_msg = stderr.decode() if stderr else "Unknown error"
             raise Exception(f"OpenClaw command failed: {error_msg}")
 
@@ -224,6 +243,8 @@ async def send_prompt_to_openclaw(session_id: str, prompt: str) -> Dict:
 
         return {"response": response_text, "status": "completed"}
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -271,6 +292,8 @@ async def send_prompt(request: PromptRequest):
             status=result.get("status", "completed"),
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

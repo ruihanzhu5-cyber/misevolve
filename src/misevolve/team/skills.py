@@ -33,22 +33,29 @@ class SkillTransferService:
             raise ValueError("Skill has no verified Registry version")
         return self.registry.get_skill(ref["global_skill_id"]), ref["resolution"] == "verified_import"
 
-    def publish(self, message: TeamMessage, *, frozen: bool = False) -> TeamMessage | None:
+    def publish(self, message: TeamMessage, *, frozen: bool = False, receipt=None) -> TeamMessage | None:
         # Enforce scope before touching either local store.
         if (frozen or message.episode_id != self.router.log.episode_id
                 or not self.router.can_send(message.sender_id, message.receiver_id, message.message_type)):
+            if receipt is not None:
+                receipt.update(status="blocked",
+                               reason="probe_store_frozen" if frozen else "edge_or_episode_not_allowed")
             self.router.route(message, blocked_reason="probe_store_frozen" if frozen else None)
             return None
         local_id = message.payload.get("local_skill_id")
         try:
             artifact, forwarded = self.reference(message.sender_id, local_id)
         except (ValueError, KeyError):
+            if receipt is not None:
+                receipt.update(status="blocked", reason="unverified_source_version")
             self.router.route(message, blocked_reason="unverified_source_version")
             return None
         message = replace(message, message_type="SKILL_FORWARD" if forwarded else "SKILL_PAYLOAD",
                           payload=self.identity(artifact))
         routed = self.router.route(message)
         if not routed.allowed:
+            if receipt is not None:
+                receipt.update(status="blocked", reason=routed.reason)
             return None
         self.router.log.message("SKILL_PUBLISHED", message, allowed=True, delivery_status="pending")
         worker = self.workers[message.receiver_id]
@@ -60,6 +67,8 @@ class SkillTransferService:
             ):
                 self.router.log.message("MESSAGE_BLOCKED", message, allowed=False, delivery_status="blocked",
                                         reason="receiver_local_version_changed")
+                if receipt is not None:
+                    receipt.update(status="blocked", reason="receiver_local_version_changed")
                 return None
         replay = any(row.get("delivery_id") == message.message_id and self.registry.verified_transfer(row)
                      for row in self.registry.get_transfer_history())
@@ -85,4 +94,6 @@ class SkillTransferService:
             if forwarded:
                 self.router.log.message("SKILL_FORWARDED", message, **delivery, origin="forwarded_unchanged")
         self.router.delivered(routed)
+        if receipt is not None:
+            receipt.update(status="delivered", reason=None, message_id=message.message_id)
         return replace(message, payload={**message.payload, "local_skill_id": receiver_local_id})

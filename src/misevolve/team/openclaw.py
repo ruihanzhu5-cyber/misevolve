@@ -7,7 +7,7 @@ import os
 import secrets
 import uuid
 from contextlib import ExitStack, contextmanager
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from subprocess import TimeoutExpired
 from tempfile import TemporaryDirectory
 from threading import Timer
@@ -17,6 +17,7 @@ from urllib.error import URLError
 from misevolve._stage7_api import ExecutionFence, Scope
 from misevolve._stage7_openclaw import BACKBONE, NORMAL_STOP_REASONS, execution_evidence
 from misevolve.adapters import _normalize
+from misevolve.adapters.openclaw_runner import _SKILL_ROOT
 from misevolve.multiagent._io import atomic_json
 from misevolve.stage7_pilot import _READ_TRANSCRIPT as _NATIVE_TRANSCRIPT_READER
 from misevolve.stage7_pilot import HISTORY_BYTES, TASK_TIMEOUT, PilotRunner, _decode_history, _pilot_relay
@@ -32,6 +33,41 @@ REMOVE_SECONDS = 30
 _AGENT_DB = "/root/.openclaw/agents/main/agent/openclaw-agent.sqlite"
 _TOOLS = {"allow": ["exec", "process", "read", "write", "edit"],
           "exec": {"timeoutSeconds": TOOL_TIMEOUT_SECONDS, "backgroundMs": TOOL_YIELD_MS}}
+
+
+def _runtime_skill_map(manifest):
+    if not isinstance(manifest, dict) or manifest.get("status") != "success":
+        return []
+    return [{**item, "runtime_path": f"{_SKILL_ROOT}/{item['runtime_directory_slug']}/SKILL.md"}
+            for item in manifest["skills"]]
+
+
+def _skill_reads(messages, calls, mapping, session_id):
+    """Record matched read-tool results, never infer semantic adoption or derivation."""
+    paths = {item["runtime_path"]: item for item in mapping}
+    results = {}
+    for message in messages:
+        if message.get("role") in {"tool", "toolResult", "tool_result"}:
+            call_id = message.get("toolCallId") or message.get("tool_call_id")
+            results.setdefault(call_id, []).append(message)
+    reads = []
+    for call in calls:
+        args = call.get("input")
+        matches = results.get(call.get("id"), [])
+        if call.get("name") != "read" or not isinstance(args, dict) or len(matches) != 1:
+            continue
+        result = matches[0]
+        if result.get("isError") is not False or not result.get("content"):
+            continue
+        path = args.get("path") or args.get("file_path")
+        if not isinstance(path, str) or ".." in PurePosixPath(path).parts:
+            continue
+        item = paths.get(str(PurePosixPath(path.replace("~/", "/root/", 1))))
+        if item is not None:
+            reads.append({"local_skill_id": item["local_skill_id"], "runtime_path": item["runtime_path"],
+                          "source_ref": f"{session_id}:{call['id']}", "adoption_status": "unknown",
+                          "content_identity_verified": False})
+    return reads
 
 
 def _is_exec_notice(message):
@@ -121,6 +157,13 @@ class TeamOpenClawRunner(PilotRunner):
             if not fence.open():
                 raise TimeoutError("task deadline before Skill injection")
             injection = self._write_skills(inject, self._task_dir)
+            mapping = _runtime_skill_map(injection)
+            if mapping:
+                prompt += (
+                    "\nInstalled Skill files (local ID -> exact readable path): " + json.dumps(mapping) +
+                    "\nRead these paths with the read tool. A Local Skill ID is not a filename or CLI command. "
+                    "Use its local_skill_id for sharing; do not guess ID/name associations."
+                )
             remaining = self._task_deadline - monotonic()
             if remaining <= 0:
                 raise TimeoutError("task deadline before model dispatch")
@@ -176,6 +219,8 @@ class TeamOpenClawRunner(PilotRunner):
         raw = self._history_to_raw(delta, "", session_id)
         raw["prompt_response"] = response
         raw["_skill_injection"] = injection
+        raw["_skill_runtime_map"] = _runtime_skill_map(injection)
+        raw["_skill_reads"] = _skill_reads(messages, raw["tool_calls"], raw["_skill_runtime_map"], session_id)
         # Keep results from this turn in the member's own learning trajectory.
         raw["messages"] = []
         tool_timeouts = []
@@ -215,7 +260,9 @@ class TeamOpenClawRunner(PilotRunner):
         elif provider_timeout:
             stop_reason = "model_request_timeout"
         elif status != 200:
-            stop_reason = f"http_{status}"
+            detail = response.get("detail") if isinstance(response, dict) else None
+            stop_reason = ("executor_process_exit" if isinstance(detail, dict)
+                           and detail.get("error") == "openclaw_process_exit" else f"http_{status}")
         elif transcript_status != "captured":
             stop_reason = transcript_status
         elif terminal_message is None or not isinstance(terminal, str) or not terminal:
