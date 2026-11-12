@@ -28,7 +28,7 @@ class TeamEpisodeScheduler:
     def __init__(
         self, pool: TeamWorkerPool, router_type, *, judge, artifact_judge=None, max_rounds=8,
         run_metadata=None, configure_workers=None, stop_after_pos=None, ensure_healthy=None, before_checkpoint=None,
-        recover_initial_block=False,
+        recover_initial_block=False, retry_failed_initial_task=False,
     ):
         self.pool = pool
         self.router_type = router_type
@@ -42,6 +42,9 @@ class TeamEpisodeScheduler:
         self.before_checkpoint = before_checkpoint
         self.recover_initial_block = recover_initial_block
         self.recovery_audit = None
+        self.retry_failed_initial_task = retry_failed_initial_task
+        if retry_failed_initial_task and not recover_initial_block:
+            raise ValueError("retry of a failed initial task requires initial-block recovery")
 
     def run(self, episode: dict) -> list[dict]:
         tasks = sorted(episode["task_sequence"], key=lambda task: task["pos"])
@@ -79,7 +82,7 @@ class TeamEpisodeScheduler:
         }
         if self.recover_initial_block:
             from .recovery import validate_first_block
-            rows, self.recovery_audit = validate_first_block(root, manifest)
+            rows, self.recovery_audit = validate_first_block(root, manifest, retry_failed=self.retry_failed_initial_task)
             first, snapshots = 0, None
         elif self.pool.resume:
             first, rows, snapshots = load_checkpoint(root, manifest)
@@ -98,7 +101,8 @@ class TeamEpisodeScheduler:
                     raise ValueError("interrupted initial block requires unchanged empty Skill Stores")
                 record_recovery(root, manifest, self.recovery_audit)
                 log.record("INITIAL_BLOCK_RECOVERED", None, preserved_positions=[r["pos"] for r in rows],
-                           task_replay=False, code_sha=manifest["code_sha"])
+                           task_replay=self.retry_failed_initial_task, successful_task_replay=False,
+                           retry_positions=self.recovery_audit["retry_positions"], code_sha=manifest["code_sha"])
             if snapshots is not None:
                 restore_native_metadata(workers, snapshots, self._snapshots(workers))
                 if snapshots != self._snapshots(workers):

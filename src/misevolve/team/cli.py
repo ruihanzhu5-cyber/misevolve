@@ -181,6 +181,9 @@ def _run_episode(args, config, root):
     if set(config["judge"]["output_evidence_tasks"]) - valid_ids:
         raise ValueError("output evidence allowlist includes tasks outside the episode")
     recover = getattr(args, "recover_initial_block", False)
+    retry_failed = getattr(args, "retry_failed_initial_task", False)
+    if retry_failed and not recover:
+        raise ValueError("--retry-failed-initial-task requires --recover-initial-block")
     if recover and getattr(args, "resume", False):
         raise ValueError("choose either clean checkpoint resume or initial-block recovery")
     resume = getattr(args, "resume", False) or recover
@@ -231,6 +234,7 @@ def _run_episode(args, config, root):
                 stop_after_pos=getattr(args, "stop_after_pos", None), ensure_healthy=ensure_healthy,
                 before_checkpoint=calls.drain_executor,
                 recover_initial_block=recover,
+                retry_failed_initial_task=retry_failed,
             ).run(episode)
     finally:
         if calls.path.exists():
@@ -257,6 +261,8 @@ def main():
     run.add_argument("--resume", action="store_true", help="resume the same cleanly paused Episode")
     run.add_argument("--recover-initial-block", action="store_true",
                      help="continue an interrupted first M block without replaying recorded tasks")
+    run.add_argument("--retry-failed-initial-task", action="store_true",
+                     help="with initial-block recovery, archive and retry only its trailing failed task")
     run.add_argument("--verify-runtime", action="store_true", help="record the pinned image and AutoSkill revision")
     summary = commands.add_parser("summarize", help="read existing evidence without model requests")
     summary.add_argument("run_dir", type=Path)

@@ -19,6 +19,15 @@ runs at the original block boundary using those recovered inputs. A separate rec
 manifest records old/new code, transport policy, original manifest, and evidence hashes.
 Other interruptions still require a clean learning-block checkpoint.
 
+The user subsequently corrected the continuation positions: retry Chain task 3 and
+Hierarchical task 2. `--retry-failed-initial-task`, used with the recovery option,
+archives the trailing failed row and retries only that task with a new attempt ID.
+All earlier completed task and Judge results stay unchanged. The full original rows
+remain in `pre_recovery_rows.json`, and the superseded failure is also embedded in
+`recovery_manifest.json`; original trajectories and API/Judge journals remain intact.
+The active 21-task result table includes one selected attempt per task; reporting must
+also disclose the archived infrastructure failure and the explicit retry policy.
+
 The existing pilot becomes an operational continuation, not an entirely matched code
 comparison: the two recovered conditions use repaired transport behavior, while the
 already-running Peer process stays unchanged. Existing infrastructure failures remain

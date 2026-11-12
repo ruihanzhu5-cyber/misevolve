@@ -1,4 +1,4 @@
-"""Recover a recorded first M block without replaying any task or Judge call.
+"""Recover a first M block, optionally retrying its trailing failed task.
 
 Intentionally narrow: recovery after native evolution requires a clean checkpoint.
 """
@@ -15,7 +15,7 @@ def read(path):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def validate_first_block(root, expected):
+def validate_first_block(root, expected, *, retry_failed=False):
     if (root / "recovery_manifest.json").exists():
         raise ValueError("this interrupted block already has a recovery attempt")
     old = read(root / "team_manifest.json")
@@ -67,20 +67,42 @@ def validate_first_block(root, expected):
     for path in (root / "workers").glob("*/evolution_events.jsonl"):
         if read_jsonl(path):
             raise ValueError("native ingest has already been attempted")
+    superseded = []
+    if retry_failed:
+        if rows[-1]["execution_status"] != "failed" or any(
+            row["execution_status"] != "completed" for row in rows[:-1]
+        ):
+            raise ValueError("retry requires one trailing failed task after a completed prefix")
+        superseded = [rows[-1]]
+        rows = rows[:-1]
     audit = {"recovered_at": datetime.now(timezone.utc).isoformat(), "prior_manifest": old,
              "new_code_sha": expected["code_sha"], "new_execution": expected["execution"],
              "new_judge": expected["judge"], "preserved_task_ids": [r["orig_id"] for r in rows],
              "prior_rows_sha256": hashlib.sha256((root / "all_rows.json").read_bytes()).hexdigest(),
-             "trajectory_sha256": hashes, "task_replay": False, "judge_replay": False,
-             "reason": "Resume after transient provider circuit stop; keep all recorded outcomes."}
+             "trajectory_sha256": hashes, "task_replay": retry_failed, "judge_replay": retry_failed,
+             "successful_task_replay": False, "successful_judge_replay": False,
+             "superseded_task_rows": superseded,
+             "retry_positions": [row["pos"] for row in superseded],
+             "reason": ("User requested retry of the trailing failed task; preserve completed tasks and prior failure evidence."
+                        if retry_failed else "Resume after transient provider circuit stop; keep all recorded outcomes.")}
     return rows, audit
 
 
 def record_recovery(root, manifest, audit):
+    if audit["superseded_task_rows"]:
+        prior = read(root / "all_rows.json")
+        atomic_json(root / "pre_recovery_rows.json", prior)
     atomic_json(root / "recovery_manifest.json", audit)
+    if audit["superseded_task_rows"]:
+        replaced = {row["task_run_id"] for row in audit["superseded_task_rows"]}
+        active = [row for row in prior if row["task_run_id"] not in replaced]
+        atomic_json(root / "all_rows.json", active)
+        from .assessment import behavior_summary
+        atomic_json(root / "behavior_summary.json", behavior_summary(active))
     atomic_json(root / "team_manifest.json", {**manifest, "recovery_history": [{
         "prior_code_sha": audit["prior_manifest"]["code_sha"], "new_code_sha": manifest["code_sha"],
         "after_recorded_pos": len(audit["preserved_task_ids"]), "details": "recovery_manifest.json",
+        "retry_positions": audit["retry_positions"],
     }]})
 
 
