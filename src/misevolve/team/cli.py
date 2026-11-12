@@ -12,6 +12,7 @@ from threading import Condition
 
 from misevolve._stage7_api import DEEPSEEK_MODEL, ProviderCalls, ProviderError, Scope
 from misevolve._stage7_openclaw import BACKBONE
+from misevolve._provider_retry import TEAM_RETRY_POLICY
 from misevolve.multiagent._io import append_jsonl, atomic_json, read_jsonl
 from misevolve.paths import repo_root
 from misevolve.run import load_episode
@@ -42,7 +43,7 @@ _EXTRACTOR_FORMAT_RETRY = (
 
 
 class EpisodeCalls(ProviderCalls):
-    """Stop further requests after an exhausted provider/transport failure."""
+    """Stop on permanent provider failures; bound transient recovery per request."""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -179,13 +180,16 @@ def _run_episode(args, config, root):
     valid_ids = {task["instance_id"] for task in episode["task_sequence"]}
     if set(config["judge"]["output_evidence_tasks"]) - valid_ids:
         raise ValueError("output evidence allowlist includes tasks outside the episode")
-    resume = getattr(args, "resume", False)
+    recover = getattr(args, "recover_initial_block", False)
+    if recover and getattr(args, "resume", False):
+        raise ValueError("choose either clean checkpoint resume or initial-block recovery")
+    resume = getattr(args, "resume", False) or recover
     if not resume and root.exists() and any(root.iterdir()):
         raise FileExistsError("team episode requires a new output directory")
     code_sha = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=repo_root(), text=True,
     ).strip()
-    calls = EpisodeCalls(root, deepseek_peak=None)
+    calls = EpisodeCalls(root, deepseek_peak=None, retry_policy=TEAM_RETRY_POLICY)
     calls.run_id = (
         json.loads((root / "team_manifest.json").read_text(encoding="utf-8"))["run_id"]
         if resume else uuid.uuid4().hex
@@ -201,7 +205,10 @@ def _run_episode(args, config, root):
         "tool_timeout_overridable_by_native_exec": True, "process_tool_enabled": True,
         "freeze_timeout_seconds": FREEZE_SECONDS, "snapshot_timeout_seconds": SNAPSHOT_SECONDS,
         "remove_timeout_seconds": REMOVE_SECONDS, "total_cost_limit_cny": None,
-        "executor_task_request_limit": None, "provider_retries_per_request": 1,
+        "executor_task_request_limit": None,
+        "provider_retries_per_request": TEAM_RETRY_POLICY.max_attempts - 1,
+        "provider_transport_policy": TEAM_RETRY_POLICY.metadata(),
+        "repeat_executor_timeouts_stop_episode": False,
     }
     metadata.update(run_id=calls.run_id, replicate_id=args.replicate_id, code_sha=code_sha,
                     artifact_cache=str(cache_dir))
@@ -214,10 +221,6 @@ def _run_episode(args, config, root):
                       if row.get("status") in {"invalid_schema", "truncated", "incomplete_response"})
         if any(count >= 2 for count in bad.values()):
             raise RuntimeError("repeat Judge response format failure; episode stopped")
-        if (root / "all_rows.json").exists():
-            rows = json.loads((root / "all_rows.json").read_text(encoding="utf-8"))
-            if sum((row.get("failure") or {}).get("stop_reason") == "model_request_timeout" for row in rows) >= 2:
-                raise RuntimeError("repeat executor provider timeout; episode stopped")
 
     try:
         with isolated_openclaw_factory(calls) as factory:
@@ -227,6 +230,7 @@ def _run_episode(args, config, root):
                 configure_workers=lambda workers: _configure_native(workers, calls), run_metadata=metadata,
                 stop_after_pos=getattr(args, "stop_after_pos", None), ensure_healthy=ensure_healthy,
                 before_checkpoint=calls.drain_executor,
+                recover_initial_block=recover,
             ).run(episode)
     finally:
         if calls.path.exists():
@@ -251,6 +255,8 @@ def main():
     run.add_argument("--stop-after-pos", type=int, choices=BOUNDARIES,
                      help="save a checkpoint and exit after this completed learning block")
     run.add_argument("--resume", action="store_true", help="resume the same cleanly paused Episode")
+    run.add_argument("--recover-initial-block", action="store_true",
+                     help="continue an interrupted first M block without replaying recorded tasks")
     run.add_argument("--verify-runtime", action="store_true", help="record the pinned image and AutoSkill revision")
     summary = commands.add_parser("summarize", help="read existing evidence without model requests")
     summary.add_argument("run_dir", type=Path)

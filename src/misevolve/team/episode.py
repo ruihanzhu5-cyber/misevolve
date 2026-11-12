@@ -28,6 +28,7 @@ class TeamEpisodeScheduler:
     def __init__(
         self, pool: TeamWorkerPool, router_type, *, judge, artifact_judge=None, max_rounds=8,
         run_metadata=None, configure_workers=None, stop_after_pos=None, ensure_healthy=None, before_checkpoint=None,
+        recover_initial_block=False,
     ):
         self.pool = pool
         self.router_type = router_type
@@ -39,6 +40,8 @@ class TeamEpisodeScheduler:
         self.stop_after_pos = stop_after_pos
         self.ensure_healthy = ensure_healthy
         self.before_checkpoint = before_checkpoint
+        self.recover_initial_block = recover_initial_block
+        self.recovery_audit = None
 
     def run(self, episode: dict) -> list[dict]:
         tasks = sorted(episode["task_sequence"], key=lambda task: task["pos"])
@@ -74,7 +77,11 @@ class TeamEpisodeScheduler:
             "tasks": [{key: task[key] for key in ("pos", "kind", "round", "instance_id")} for task in tasks],
             "episode_sha256": hashlib.sha256(canonical_json(episode).encode("utf-8")).hexdigest(),
         }
-        if self.pool.resume:
+        if self.recover_initial_block:
+            from .recovery import validate_first_block
+            rows, self.recovery_audit = validate_first_block(root, manifest)
+            first, snapshots = 0, None
+        elif self.pool.resume:
             first, rows, snapshots = load_checkpoint(root, manifest)
             if self.stop_after_pos is not None and self.stop_after_pos <= first:
                 raise ValueError("pause must be after the checkpoint")
@@ -85,6 +92,13 @@ class TeamEpisodeScheduler:
             atomic_json(root / "team_manifest.json", manifest)
         workers = self.pool.setup_workers()
         try:
+            if self.recovery_audit is not None:
+                from .recovery import record_recovery
+                if any(s["skills"] or s["ingests"] or s["imports"] for s in self._snapshots(workers).values()):
+                    raise ValueError("interrupted initial block requires unchanged empty Skill Stores")
+                record_recovery(root, manifest, self.recovery_audit)
+                log.record("INITIAL_BLOCK_RECOVERED", None, preserved_positions=[r["pos"] for r in rows],
+                           task_replay=False, code_sha=manifest["code_sha"])
             if snapshots is not None:
                 restore_native_metadata(workers, snapshots, self._snapshots(workers))
                 if snapshots != self._snapshots(workers):
@@ -117,6 +131,14 @@ class TeamEpisodeScheduler:
                                snapshot_hash=hashlib.sha256(canonical_json(snapshot).encode("utf-8")).hexdigest())
                 atomic_json(root / "frozen_stores.json", frozen)
             for task in block:
+                if self.recovery_audit is not None and start == 0:
+                    prior = next((r for r in rows if r.get("pos") == task["pos"]), None)
+                    if prior is not None:
+                        from .recovery import restore_learning_trace
+                        trace = restore_learning_trace(root, prior, task, workers, self.recovery_audit)
+                        if trace is not None:
+                            traces["A"].append(trace)
+                        continue
                 task_id = task["instance_id"]
                 run_id = uuid.uuid4().hex
                 out_dir = root / "tasks" / f"{task['pos']:02}-{run_id}"

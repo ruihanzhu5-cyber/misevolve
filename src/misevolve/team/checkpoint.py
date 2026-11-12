@@ -15,7 +15,7 @@ CHECKPOINT = "team_checkpoint.json"
 _ROOT_FILES = (
     "team_manifest.json", "all_rows.json", "behavior_summary.json", "team_events.jsonl",
     "model_calls.jsonl", "judge_results.jsonl", "frozen_stores.json", "request_rejections.jsonl",
-    "late_executor_attempts.jsonl",
+    "late_executor_attempts.jsonl", "provider_retries.jsonl", "recovery_manifest.json",
 )
 
 
@@ -58,7 +58,8 @@ def load(root, expected_manifest):
     if (checkpoint.get("schema_version") != 1 or last not in BOUNDARIES
             or progress != {"phase": "paused", "last_completed_pos": last, "next_pos": last + 1}):
         raise ValueError("resume requires a clean pause at a learning-block boundary")
-    if canonical_json(manifest) != canonical_json(expected_manifest):
+    configuration = {k: v for k, v in manifest.items() if k != "recovery_history"}
+    if canonical_json(configuration) != canonical_json(expected_manifest):
         raise ValueError("resume configuration, code or task plan changed")
     if checkpoint.get("file_hashes") != _state(root):
         raise ValueError("persisted episode evidence changed after the pause; refusing to replay")

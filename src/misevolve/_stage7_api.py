@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.request
@@ -18,6 +19,7 @@ from pathlib import Path
 from threading import Lock
 
 from .multiagent._io import append_jsonl, read_jsonl
+from ._provider_retry import bounded_wait, retry_after_seconds
 
 MINIMAX_MODEL = "MiniMax-M3.1-Flash"
 MINIMAX_URL = "https://api.minimax.cn/anthropic/v1/messages"
@@ -232,13 +234,14 @@ def _estimate(usage: dict, *, deepseek: bool, peak: bool) -> float | None:
 
 
 class ProviderCalls:
-    def __init__(self, run_dir: Path, *, deepseek_peak: bool | None):
+    def __init__(self, run_dir: Path, *, deepseek_peak: bool | None, retry_policy=None):
         self.path = run_dir / "model_calls.jsonl"
         self.run_id = run_dir.name
         self.deepseek_peak = deepseek_peak
         self._attempts = Counter()
         self._lock = Lock()
         self._auth_failed = False
+        self.retry_policy = retry_policy
 
     def check_credentials(self) -> None:
         missing = [name for name in ("MINIMAX_API_KEY", "DEEPSEEK_API_KEY") if not os.environ.get(name, "").strip()]
@@ -291,8 +294,18 @@ class ProviderCalls:
                 if self._attempts[call_scope] >= max_calls:
                     raise ProviderError("Stage 7 module call limit reached")
                 self._attempts[call_scope] += 1
-        for attempt in (1, 2):
+        policy = self.retry_policy
+        fence = scope.execution
+        recovery_deadline = time.monotonic() + policy.recovery_seconds if policy else None
+        if policy and fence is not None:
+            recovery_deadline = min(recovery_deadline, fence.deadline)
+        max_attempts = policy.max_attempts if policy else 2
+        for attempt in range(1, max_attempts + 1):
+            if policy and (time.monotonic() >= recovery_deadline or
+                           (fence is not None and not fence.open())):
+                raise ProviderError("provider recovery deadline reached", category="provider_recovery_timeout")
             status = request_id = response_model = None
+            retry_after = provider_error_code = None
             error = None
             usage = {}
             stream = {} if executor else None
@@ -304,7 +317,8 @@ class ProviderCalls:
             if fence is not None:
                 fence.admit(attempt_id)
             try:
-                with opener.open(request, timeout=REQUEST_TIMEOUT) as response:
+                request_timeout = min(REQUEST_TIMEOUT, max(.01, recovery_deadline - time.monotonic())) if policy else REQUEST_TIMEOUT
+                with opener.open(request, timeout=request_timeout) as response:
                     status = response.status
                     request_id = response.headers.get("request-id") or response.headers.get("x-request-id")
                     content_type = response.headers.get("Content-Type", "application/json")
@@ -317,8 +331,21 @@ class ProviderCalls:
             except urllib.error.HTTPError as exc:
                 status = exc.code
                 request_id = exc.headers.get("request-id") or exc.headers.get("x-request-id")
+                retry_after = retry_after_seconds(exc.headers.get("Retry-After"))
                 try:
-                    error = _http_error_kind(exc)
+                    if status == 429:
+                        # Error messages may echo requests. Retain only bounded codes.
+                        error = "http_error"
+                        try:
+                            details = json.loads(exc.read(8192))
+                            nested = details.get("error") or details.get("base_resp") or {}
+                            code = nested.get("code", nested.get("status_code", nested.get("type"))) if isinstance(nested, dict) else None
+                            if code is not None and re.fullmatch(r"[A-Za-z0-9_.:-]{1,80}", str(code)):
+                                provider_error_code = str(code)
+                        except (ValueError, TypeError, AttributeError):
+                            pass
+                    else:
+                        error = _http_error_kind(exc)
                 except (OSError, IncompleteRead):
                     error = "http_error"
                 finally:
@@ -337,6 +364,7 @@ class ProviderCalls:
                 "call_id": call_id, "attempt": attempt, "request_id": request_id,
                 "started_at": started.isoformat(), "elapsed_seconds": round(time.monotonic() - elapsed, 4),
                 "status": error or "ok", "http_status": status,
+                "retry_after_seconds": retry_after, "provider_error_code": provider_error_code,
                 "request_bytes": len(body), "input_token_estimate": len(body),
                 "requested_max_tokens": limit,
                 "max_output_tokens": payload["max_tokens"],
@@ -360,10 +388,23 @@ class ProviderCalls:
                 raise ProviderError("execution ended before response delivery", category="task_deadline")
             if error is None:
                 return content, content_type
-            if attempt == 1 and (error in RETRYABLE_TRANSPORT or status == 429
-                                 or (status is not None and 500 <= status < 600)):
-                time.sleep(1)
-                continue
+            transient = error in RETRYABLE_TRANSPORT or status == 429 or (status is not None and 500 <= status < 600)
+            if transient:
+                if policy:
+                    delay = policy.delay(attempt, retry_after)
+                    append_jsonl(self.path.with_name("provider_retries.jsonl"), {
+                        "call_id": call_id, "attempt": attempt, "module": module, "instance_id": scope.instance_id,
+                        "http_status": status, "cause": error, "retry_after_seconds": retry_after,
+                        "scheduled_wait_seconds": delay if attempt < max_attempts else None,
+                    })
+                    if attempt < max_attempts and bounded_wait(delay, recovery_deadline, fence):
+                        continue
+                    raise ProviderError("transient provider failure exhausted bounded recovery", status,
+                                        category="provider_recovery_timeout",
+                                        details={"last_error": error, "attempts": attempt})
+                if attempt == 1:
+                    time.sleep(1)
+                    continue
             raise ProviderError(f"{provider} {error}", status, category=error)
         raise AssertionError("provider retry loop exceeded")
 

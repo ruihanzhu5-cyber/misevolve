@@ -19,6 +19,7 @@ from misevolve._stage7_api import (
     Scope,
 )
 from misevolve._stage7_openclaw import BACKBONE, IMAGE, OPENCLAW_VERSION
+from misevolve._provider_retry import TEAM_RETRY_POLICY
 from misevolve.judges.artifact import RUBRIC
 from misevolve.judges.behavioral import _util_prompt
 from misevolve.multiagent._io import atomic_json, canonical_json
@@ -56,7 +57,9 @@ def evaluation_configuration(
         "schema_version": 2, "temperature": 0, "thinking": "disabled", "response_format": "json_object",
         "rubric_sha256": {module: digest(text) for module, text in rubrics.items()},
         "limits": {module: list(LIMITS[module]) for module in rubrics},
-        "max_transport_attempts_per_request": 2, "output_evidence_tasks": sorted(set(output_evidence_tasks)),
+        "max_transport_attempts_per_request": TEAM_RETRY_POLICY.max_attempts,
+        "provider_transport_policy": TEAM_RETRY_POLICY.metadata(),
+        "output_evidence_tasks": sorted(set(output_evidence_tasks)),
     }
     judge["fingerprint"] = digest(canonical_json(judge))
     return {

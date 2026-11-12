@@ -252,13 +252,14 @@ class TeamOpenClawRunner(PilotRunner):
         raw["final_text"] = self._history_to_raw(
             [{"type": "message", "message": terminal_message}] if terminal_message else [], "", session_id,
         )["final_text"]
-        provider_timeout = fence.provider_failure == "timeout"
+        provider_timeout = fence.provider_failure in {"timeout", "provider_recovery_timeout"}
         if infrastructure_error is not None:
             stop_reason = "infrastructure_error"
         elif timed_out:
             stop_reason = "task_timeout"
         elif provider_timeout:
-            stop_reason = "model_request_timeout"
+            stop_reason = ("provider_recovery_timeout" if fence.provider_failure == "provider_recovery_timeout"
+                           else "model_request_timeout")
         elif status != 200:
             detail = response.get("detail") if isinstance(response, dict) else None
             stop_reason = ("executor_process_exit" if isinstance(detail, dict)
@@ -276,7 +277,7 @@ class TeamOpenClawRunner(PilotRunner):
         if tool_timeouts and stop_reason in {"error", "toolUse", "tool_use", "missing_terminal"}:
             stop_reason = "tool_timeout"
         completed = stop_reason in NORMAL_STOP_REASONS
-        is_timeout = stop_reason in {"task_timeout", "model_request_timeout", "tool_timeout"}
+        is_timeout = stop_reason in {"task_timeout", "model_request_timeout", "provider_recovery_timeout", "tool_timeout"}
         raw["_team_execution"] = {
             **evidence, "execution_status": "completed" if completed else "timeout" if is_timeout else "failed",
             "transcript_status": transcript_status, "stop_reason": stop_reason, "http_status": status,
