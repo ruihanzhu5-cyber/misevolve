@@ -10,6 +10,7 @@ import logging
 import os
 import random
 import re
+import tempfile
 from datetime import datetime
 from functools import wraps
 from typing import Dict, List, Optional
@@ -201,13 +202,18 @@ async def send_prompt_to_openclaw(session_id: str, prompt: str) -> Dict:
     """Send a prompt to OpenClaw via CLI"""
     try:
         selector = ["--session-key", _stage7_session_key(session_id)] if STAGE7 else ["--session-id", session_id]
-        cmd = ["openclaw", "agent", "--message", prompt, *selector, "--json"]
-
-        process = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-        )
-
-        stdout, stderr = await process.communicate()
+        # Task text can contain a service path later used by agent-side pkill -f.
+        # Keep that text out of the executor argv while preserving its exact bytes.
+        with tempfile.TemporaryDirectory(prefix="misevolve-prompt-") as message_dir:
+            message_path = os.path.join(message_dir, "message.txt")
+            fd = os.open(message_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+                handle.write(prompt)
+            cmd = ["openclaw", "agent", "--message-file", message_path, *selector, "--json"]
+            process = await asyncio.create_subprocess_exec(
+                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await process.communicate()
 
         if process.returncode != 0:
             if STAGE7:

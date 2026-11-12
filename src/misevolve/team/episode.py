@@ -28,7 +28,7 @@ class TeamEpisodeScheduler:
     def __init__(
         self, pool: TeamWorkerPool, router_type, *, judge, artifact_judge=None, max_rounds=8,
         run_metadata=None, configure_workers=None, stop_after_pos=None, ensure_healthy=None, before_checkpoint=None,
-        recover_initial_block=False, retry_failed_initial_task=False,
+        recover_initial_block=False, retry_failed_initial_task=False, recover_prepared_block=False,
     ):
         self.pool = pool
         self.router_type = router_type
@@ -43,6 +43,8 @@ class TeamEpisodeScheduler:
         self.recover_initial_block = recover_initial_block
         self.recovery_audit = None
         self.retry_failed_initial_task = retry_failed_initial_task
+        self.recover_prepared_block = recover_prepared_block
+        self.block_recovery = None
         if retry_failed_initial_task and not recover_initial_block:
             raise ValueError("retry of a failed initial task requires initial-block recovery")
 
@@ -80,7 +82,12 @@ class TeamEpisodeScheduler:
             "tasks": [{key: task[key] for key in ("pos", "kind", "round", "instance_id")} for task in tasks],
             "episode_sha256": hashlib.sha256(canonical_json(episode).encode("utf-8")).hexdigest(),
         }
-        if self.recover_initial_block:
+        if self.recover_prepared_block:
+            from .block_recovery import load
+            self.block_recovery, rows = load(root, manifest)
+            first = (self.block_recovery['next_pos'] - 1) // 3 * 3
+            snapshots = self.block_recovery['stores']
+        elif self.recover_initial_block:
             from .recovery import validate_first_block
             rows, self.recovery_audit = validate_first_block(root, manifest, retry_failed=self.retry_failed_initial_task)
             first, snapshots = 0, None
@@ -107,7 +114,13 @@ class TeamEpisodeScheduler:
                 restore_native_metadata(workers, snapshots, self._snapshots(workers))
                 if snapshots != self._snapshots(workers):
                     raise ValueError("restored Skill Stores differ from the paused checkpoint")
-                log.record("EPISODE_RESUMED", None, last_completed_pos=first, next_pos=first + 1)
+                next_pos = self.block_recovery['next_pos'] if self.block_recovery else first + 1
+                log.record("EPISODE_RESUMED", None, last_completed_pos=next_pos - 1, next_pos=next_pos)
+            if self.block_recovery is not None:
+                from .block_recovery import mark_started
+                mark_started(root, manifest, self.block_recovery)
+                log.record('BLOCK_RECOVERED', None, next_pos=self.block_recovery['next_pos'],
+                           source_run=self.block_recovery['source_run'], completed_task_replay=False)
             if self.configure_workers is not None:
                 self.configure_workers(workers)
             registry = GlobalSkillRegistry(root / "registry")
@@ -135,6 +148,12 @@ class TeamEpisodeScheduler:
                                snapshot_hash=hashlib.sha256(canonical_json(snapshot).encode("utf-8")).hexdigest())
                 atomic_json(root / "frozen_stores.json", frozen)
             for task in block:
+                if self.block_recovery is not None and task['pos'] < self.block_recovery['next_pos']:
+                    from .block_recovery import restore_pending
+                    prior=next(row for row in rows if row.get('pos')==task['pos'])
+                    restored=restore_pending(root,prior,task,workers,self.block_recovery)
+                    for agent,trace in restored.items(): traces[agent].append(trace)
+                    continue
                 if self.recovery_audit is not None and start == 0:
                     prior = next((r for r in rows if r.get("pos") == task["pos"]), None)
                     if prior is not None:

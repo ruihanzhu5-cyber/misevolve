@@ -40,7 +40,8 @@ def test_recovery_preserves_rows_and_learning_inputs_without_replaying_tasks(
         judged.append(trace.raw['task_run_id'])
         return harness.TaskOutcome(False, True)
 
-    metadata = {'code_sha': 'original', 'execution': {}, 'judge': {}}
+    metadata = {'code_sha': 'original', 'execution': {}, 'judge': {},
+                'runtime': {'image_id': 'old-image', 'autoskill_sha': 'pinned'}}
     def pool(resume=False):
         return TeamWorkerPool(tmp_path, runner_factory=lambda *_: Runner('chain'),
                               method_factory=factory, resume=resume)
@@ -67,9 +68,14 @@ def test_recovery_preserves_rows_and_learning_inputs_without_replaying_tasks(
     changed['episode_sha256'] = 'changed'
     with pytest.raises(ValueError, match='episode_sha256'):
         validate_first_block(tmp_path, changed)
+    changed = copy.deepcopy(original_manifest)
+    changed['runtime']['autoskill_sha'] = 'different'
+    with pytest.raises(ValueError, match='runtime'):
+        validate_first_block(tmp_path, changed)
     recovering = True
     result = TeamEpisodeScheduler(pool(True), ChainRouter, judge=judge,
-        run_metadata={**metadata, 'code_sha': 'repaired'}, recover_initial_block=True,
+        run_metadata={**metadata, 'code_sha': 'repaired',
+                      'runtime': {'image_id': 'new-image', 'autoskill_sha': 'pinned'}}, recover_initial_block=True,
         retry_failed_initial_task=retry_failed, stop_after_pos=3).run(episode)
     kept = failed_pos - int(retry_failed)
     assert result[:kept] == prior[:kept]

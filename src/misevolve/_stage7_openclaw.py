@@ -28,7 +28,7 @@ from .backbones import resolve_agent
 from .multiagent._io import read_jsonl
 
 BACKBONE = "minimax-m3.1-flash"
-IMAGE = "misevolve-openclaw:stage7-2026.11.1"
+IMAGE = "misevolve-openclaw:stage7-2026.11.1-promptfile"
 OPENCLAW_VERSION = "2026.11.1"
 NORMAL_STOP_REASONS = ("stop", "end_turn", "stop_sequence")
 _NATIVE_CORRECTION = "The previous assistant turn's tool call was rejected before it ran"

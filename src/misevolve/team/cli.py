@@ -181,12 +181,15 @@ def _run_episode(args, config, root):
     if set(config["judge"]["output_evidence_tasks"]) - valid_ids:
         raise ValueError("output evidence allowlist includes tasks outside the episode")
     recover = getattr(args, "recover_initial_block", False)
+    prepared = getattr(args, "recover_prepared_block", False)
+    if sum(bool(value) for value in (recover, prepared, getattr(args, 'resume', False))) > 1:
+        raise ValueError('choose exactly one recovery/resume mode')
     retry_failed = getattr(args, "retry_failed_initial_task", False)
     if retry_failed and not recover:
         raise ValueError("--retry-failed-initial-task requires --recover-initial-block")
     if recover and getattr(args, "resume", False):
         raise ValueError("choose either clean checkpoint resume or initial-block recovery")
-    resume = getattr(args, "resume", False) or recover
+    resume = getattr(args, "resume", False) or recover or prepared
     if not resume and root.exists() and any(root.iterdir()):
         raise FileExistsError("team episode requires a new output directory")
     code_sha = subprocess.check_output(
@@ -235,6 +238,7 @@ def _run_episode(args, config, root):
                 before_checkpoint=calls.drain_executor,
                 recover_initial_block=recover,
                 retry_failed_initial_task=retry_failed,
+                recover_prepared_block=prepared,
             ).run(episode)
     finally:
         if calls.path.exists():
@@ -263,6 +267,8 @@ def main():
                      help="continue an interrupted first M block without replaying recorded tasks")
     run.add_argument("--retry-failed-initial-task", action="store_true",
                      help="with initial-block recovery, archive and retry only its trailing failed task")
+    run.add_argument('--recover-prepared-block', action='store_true',
+                     help='resume an audited recovery fork inside a learning block without replaying completed tasks')
     run.add_argument("--verify-runtime", action="store_true", help="record the pinned image and AutoSkill revision")
     summary = commands.add_parser("summarize", help="read existing evidence without model requests")
     summary.add_argument("run_dir", type=Path)

@@ -31,16 +31,17 @@ def validate_first_block(root, expected, *, retry_failed=False):
     for key in ("episode_id", "communication_protocol", "edges", "agents", "max_rounds", "tasks",
                 "exposure_submitter", "team_submitter", "probe_policy", "delivery_policy",
                 "skill_read_evidence", "assessment_schema_version", "episode_sha256", "run_id",
-                "replicate_id", "runtime", "artifact_cache"):
+                "replicate_id", "artifact_cache"):
         if canonical_json(old.get(key)) != canonical_json(expected.get(key)):
             raise ValueError(f"recovery would change experiment field: {key}")
     allowed = {
         "execution": {"provider_retries_per_request", "provider_transport_policy", "repeat_executor_timeouts_stop_episode"},
         "judge": {"fingerprint", "max_transport_attempts_per_request", "provider_transport_policy"},
+        "runtime": {"image_id"},
     }
     for section, excluded in allowed.items():
-        before = {k:v for k,v in (old[section] or {}).items() if k not in excluded}
-        after = {k:v for k,v in (expected[section] or {}).items() if k not in excluded}
+        before = {k:v for k,v in (old.get(section) or {}).items() if k not in excluded}
+        after = {k:v for k,v in (expected.get(section) or {}).items() if k not in excluded}
         if before != after:
             raise ValueError(f"recovery changes non-transport {section} configuration")
     events = read_jsonl(root / "team_events.jsonl")
@@ -77,7 +78,8 @@ def validate_first_block(root, expected, *, retry_failed=False):
         rows = rows[:-1]
     audit = {"recovered_at": datetime.now(timezone.utc).isoformat(), "prior_manifest": old,
              "new_code_sha": expected["code_sha"], "new_execution": expected["execution"],
-             "new_judge": expected["judge"], "preserved_task_ids": [r["orig_id"] for r in rows],
+             "new_judge": expected["judge"], "new_runtime": expected.get("runtime"),
+             "preserved_task_ids": [r["orig_id"] for r in rows],
              "prior_rows_sha256": hashlib.sha256((root / "all_rows.json").read_bytes()).hexdigest(),
              "trajectory_sha256": hashes, "task_replay": retry_failed, "judge_replay": retry_failed,
              "successful_task_replay": False, "successful_judge_replay": False,

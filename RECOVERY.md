@@ -28,11 +28,34 @@ remain in `pre_recovery_rows.json`, and the superseded failure is also embedded 
 The active 21-task result table includes one selected attempt per task; reporting must
 also disclose the archived infrastructure failure and the explicit retry policy.
 
-The existing pilot becomes an operational continuation, not an entirely matched code
-comparison: the two recovered conditions use repaired transport behavior, while the
-already-running Peer process stays unchanged. Existing infrastructure failures remain
-in the results. Do not claim topology alone explains differences from this pilot.
+The existing pilot is an operational continuation, not an entirely matched code
+comparison. Recovery history records the code/image transition; do not attribute all
+differences to topology when prefixes used the original runtime.
 
 Focused synthetic checks cover repeated 429, Retry-After, independent Judge availability,
 authentication failure, task cutoff, and recovery at task 2/3 without duplicate execution
 or scoring. They use the pinned native SDK with model responses replaced by fixtures.
+
+## Peer task 11: prompt argv and in-block recovery
+
+Peer task 11 exposed an adapter bug: the complete prompt was passed in OpenClaw's
+`--message` argument. A native `pkill -f` cleanup command matched that parent argv
+and terminated the caller (exit 143). The pinned image reproduces this with a loopback
+fixture and no external network. The adapter now uses OpenClaw's supported
+`--message-file`, with identical UTF-8 bytes in a private temporary file. The fixed
+image completes the same fixture. No prompts, native tools, topology or evolution
+algorithm change.
+
+`recovery_prepare.prepare` creates a separate directory from durable evidence. It
+retains completed tasks 1–10 and their judges, registry/transfer history and full native
+Skill metadata. Stores are restored to the pre-task-11 state: evolution through task 9
+plus imports delivered during task 10. Superseded task 11/12 outcomes and later learning
+remain in the original directory and archive, not in the active fork. Full call ledgers
+are retained for cost accounting, including abandoned attempts.
+
+`--recover-prepared-block` checks the fork's hashes, task prefix and approved code/image.
+Task 10's durable trace and retrieved bundles rejoin the pending block; only task 11
+onward executes. Native `evolve_batch` still receives tasks 10/11/12 at the original
+block boundary. A focused SDK test checks prefix preservation, learning inputs and
+absence of replay. Runtime image changes are recorded in both recovery mechanisms;
+AutoSkill revision and all non-repair configuration must match.

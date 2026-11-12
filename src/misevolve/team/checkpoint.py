@@ -15,7 +15,7 @@ CHECKPOINT = "team_checkpoint.json"
 _ROOT_FILES = (
     "team_manifest.json", "all_rows.json", "behavior_summary.json", "team_events.jsonl",
     "model_calls.jsonl", "judge_results.jsonl", "frozen_stores.json", "request_rejections.jsonl",
-    "late_executor_attempts.jsonl", "provider_retries.jsonl", "recovery_manifest.json", "pre_recovery_rows.json",
+    "late_executor_attempts.jsonl", "provider_retries.jsonl", "recovery_manifest.json", "pre_recovery_rows.json", "block_recovery.json",
 )
 
 
