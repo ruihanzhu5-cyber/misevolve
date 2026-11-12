@@ -24,7 +24,7 @@ def load(root, expected):
         if canonical_json(old.get(key)) != canonical_json(expected.get(key)):
             raise ValueError('recovery changes protocol field: '+key)
     for section, allowed in {
-        'execution': {'image','provider_retries_per_request','provider_transport_policy','repeat_executor_timeouts_stop_episode'},
+        'execution': {'image','maintainer_format_retries_per_request','judge_format_failures_stop_episode','provider_retries_per_request','provider_transport_policy','repeat_executor_timeouts_stop_episode'},
         'judge': {'fingerprint','max_transport_attempts_per_request','provider_transport_policy'},
         'runtime': {'image_id'},
     }.items():
@@ -34,8 +34,8 @@ def load(root, expected):
         raise ValueError('recovery code or image differs from approved repair')
     rows=json.loads((root/'all_rows.json').read_text(encoding='utf8'))
     prefix=[r for r in rows if r.get('pos') is not None]
-    if [r['pos'] for r in prefix] != list(range(1,plan['next_pos'])) or any(r['execution_status']!='completed' for r in prefix):
-        raise ValueError('recovery requires the intact completed task prefix')
+    if [r['pos'] for r in prefix] != list(range(1,plan['next_pos'])) or any(r['execution_status'] not in ('completed','timeout') for r in prefix):
+        raise ValueError('recovery requires an intact completed/timeout task prefix')
     if [(r['pos'],r['orig_id']) for r in prefix] != [(t['pos'],t['instance_id']) for t in expected['tasks'][:plan['next_pos']-1]]:
         raise ValueError('recovery task prefix differs from episode')
     return plan, rows

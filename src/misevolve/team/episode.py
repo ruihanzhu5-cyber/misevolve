@@ -155,6 +155,8 @@ class TeamEpisodeScheduler:
                 if self.block_recovery is not None and task['pos'] < self.block_recovery['next_pos']:
                     from .block_recovery import restore_pending
                     prior=next(row for row in rows if row.get('pos')==task['pos'])
+                    if prior['execution_status']=='timeout':
+                        continue
                     restored=restore_pending(root,prior,task,workers,self.block_recovery)
                     for agent,trace in restored.items(): traces[agent].append(trace)
                     continue

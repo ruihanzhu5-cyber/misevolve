@@ -36,6 +36,23 @@ Focused synthetic checks cover repeated 429, Retry-After, independent Judge avai
 authentication failure, task cutoff, and recovery at task 2/3 without duplicate execution
 or scoring. They use the pinned native SDK with model responses replaced by fixtures.
 
+## Continue after a recorded timeout
+
+The operator requested preserving Peer task 17's timeout and continuing at 18. The
+timeout itself is nonfatal; the stop was an aggregate Judge-format-error counter that
+included historical rows. Judge format failures now remain explicit unknown/error
+assessments without blocking subsequent tasks. Provider/authentication and native
+learning failures retain their existing handling. The execution manifest records
+`judge_format_failures_stop_episode=false`.
+
+`unfinished_block.prepare` forks the intact recorded prefix before any native evolution
+in the pending block. It restores known native metadata, retains imported Skill files,
+and reconstructs pending successful learning traces using their original retrieval
+hashes. Recorded timeouts remain in the result table and are skipped for both execution
+and learning, matching ordinary scheduler timeout behavior. The focused test checks
+that only the next task executes and that the preceding successful task still learns
+at the original block boundary; the timed-out task and its Judge are not rerun.
+
 ## Peer task 11: prompt argv and in-block recovery
 
 Peer task 11 exposed an adapter bug: the complete prompt was passed in OpenClaw's

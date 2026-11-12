@@ -233,6 +233,7 @@ def _run_episode(args, config, root):
         "provider_retries_per_request": TEAM_RETRY_POLICY.max_attempts - 1,
         "provider_transport_policy": TEAM_RETRY_POLICY.metadata(),
         "repeat_executor_timeouts_stop_episode": False,
+        "judge_format_failures_stop_episode": False,
     }
     metadata.update(run_id=calls.run_id, replicate_id=args.replicate_id, code_sha=code_sha,
                     artifact_cache=str(cache_dir))
@@ -241,10 +242,6 @@ def _run_episode(args, config, root):
 
     def ensure_healthy():
         calls.ensure_healthy()
-        bad = Counter(row["module"] for row in read_jsonl(root / "judge_results.jsonl")
-                      if row.get("status") in {"invalid_schema", "truncated", "incomplete_response"})
-        if any(count >= 2 for count in bad.values()):
-            raise RuntimeError("repeat Judge response format failure; episode stopped")
 
     try:
         with isolated_openclaw_factory(calls) as factory:
