@@ -35,7 +35,7 @@ def validate_first_block(root, expected, *, retry_failed=False):
         if canonical_json(old.get(key)) != canonical_json(expected.get(key)):
             raise ValueError(f"recovery would change experiment field: {key}")
     allowed = {
-        "execution": {"image", "provider_retries_per_request", "provider_transport_policy", "repeat_executor_timeouts_stop_episode"},
+        "execution": {"image", "maintainer_format_retries_per_request", "provider_retries_per_request", "provider_transport_policy", "repeat_executor_timeouts_stop_episode"},
         "judge": {"fingerprint", "max_transport_attempts_per_request", "provider_transport_policy"},
         "runtime": {"image_id"},
     }

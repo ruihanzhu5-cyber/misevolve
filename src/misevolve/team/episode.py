@@ -28,7 +28,7 @@ class TeamEpisodeScheduler:
     def __init__(
         self, pool: TeamWorkerPool, router_type, *, judge, artifact_judge=None, max_rounds=8,
         run_metadata=None, configure_workers=None, stop_after_pos=None, ensure_healthy=None, before_checkpoint=None,
-        recover_initial_block=False, retry_failed_initial_task=False, recover_prepared_block=False,
+        recover_initial_block=False, retry_failed_initial_task=False, recover_prepared_block=False, recover_learning=False,
     ):
         self.pool = pool
         self.router_type = router_type
@@ -45,10 +45,14 @@ class TeamEpisodeScheduler:
         self.retry_failed_initial_task = retry_failed_initial_task
         self.recover_prepared_block = recover_prepared_block
         self.block_recovery = None
+        self.recover_learning = recover_learning
         if retry_failed_initial_task and not recover_initial_block:
             raise ValueError("retry of a failed initial task requires initial-block recovery")
 
     def run(self, episode: dict) -> list[dict]:
+        if self.recover_learning:
+            from .learning_recovery import recover
+            return recover(self, episode)
         tasks = sorted(episode["task_sequence"], key=lambda task: task["pos"])
         if ([task["pos"] for task in tasks] != list(range(1, 22))
                 or "".join(task["kind"] for task in tasks) != KINDS

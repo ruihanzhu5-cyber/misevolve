@@ -59,3 +59,25 @@ onward executes. Native `evolve_batch` still receives tasks 10/11/12 at the orig
 block boundary. A focused SDK test checks prefix preservation, learning inputs and
 absence of replay. Runtime image changes are recorded in both recovery mechanisms;
 AutoSkill revision and all non-repair configuration must match.
+
+## Interrupted native maintenance
+
+The resumed Peer completed tasks 11/12, then B's task-12 merge synthesis returned
+malformed JSON. The SDK performed a fallback Store mutation before the adapter's
+post-ingest check stopped the episode. Maintainer calls now permit two bounded format
+corrections before stopping; every original/corrected response remains journaled.
+This changes the recorded operational retry policy, not native merge decisions.
+
+`--recover-learning` accepts a separately prepared, hash-checked fork. Successful task
+rows and ingests are retained; the failed ingest and its post-failure mutation remain
+archived, while its complete pre-ingest native Store is restored. Pending learning
+inputs are reconstructed from durable trajectories and hash-matched retrieved Skill
+versions. The native merge preference is restored from successful upserts in the
+interrupted block. Previously unlearned imported Skills use their persisted native
+directory metadata; this is explicitly listed in the recovery audit.
+
+Completed artifact assessments use the existing content/configuration cache. Once all
+three workers finish learning, recovery writes the regular block checkpoint. A normal
+`--resume` then starts the next task. The focused regression simulates a failure after
+SDK mutation and checks that only B12 and C10/11/12 learn, with zero task executions or
+behavioral Judge calls, preserved source evidence, and one successful ingest per task.

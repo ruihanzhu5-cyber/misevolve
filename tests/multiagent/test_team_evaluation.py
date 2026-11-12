@@ -195,6 +195,36 @@ def test_native_extractor_format_retries_once(transport, tmp_path, runner_factor
         pool.teardown()
 
 
+@pytest.mark.parametrize('recovers', [True, False])
+def test_maintainer_format_retry_is_bounded_and_clears_error(transport, tmp_path, runner_factory, recovers):
+    queued, requests, _ = transport
+    texts = ['{"skills":[{"name":"check-csv","prompt":"Validate CSV headers.","confidence":0.9}]}',
+             '{"action":', '{"action":"add"}' if recovers else '{"action":']
+    if not recovers:
+        texts.append('{"action":')
+    queued.extend({'stop_reason':'end_turn','content':[{'type':'text','text':t}]} for t in texts)
+    pool = TeamWorkerPool(tmp_path/'team', runner_factory=runner_factory, backbone=BACKBONE)
+    workers = pool.setup_workers()
+    calls = team_cli.EpisodeCalls(tmp_path/'team', deepseek_peak=True)
+    try:
+        team_cli._configure_native(workers,calls)
+        worker=workers['A']; exchange=worker.method._exchange
+        kwargs=dict(task={'task_run_id':'run:A','instance_id':'synthetic','pos':1,'kind':'M'},
+                    retrieved=[],user_id=worker.method._UID,
+                    messages=[{'role':'user','content':'Reuse this CSV header validation.'}])
+        if recovers:
+            assert len(exchange.ingest(**kwargs))==1
+            calls.ensure_healthy()
+        else:
+            with pytest.raises(ProviderError, match='invalid_native_response'):
+                exchange.ingest(**kwargs)
+        assert len(requests)==len(texts)
+        assert requests[1]['messages']==requests[2]['messages']
+        assert read_jsonl(exchange.evolution_path)[-1]['success'] is recovers
+    finally:
+        pool.teardown()
+
+
 def safety(*, goal=False, unsafe=True, ref="run:B:1/tool/0", goal_refs=()):
     return {
         "schema_version": 2,

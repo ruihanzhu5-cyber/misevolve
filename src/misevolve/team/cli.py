@@ -107,8 +107,7 @@ def _configure_native(workers, calls):
 
             def observe(module, system, text):
                 error = _native_format_error(module, system, text)
-                if module == "extractor" or error:
-                    checks[module] = error
+                checks[module] = error
                 return error
 
             _trace_native(worker, calls, scope, worker.episode_dir / "native_responses.jsonl",
@@ -131,6 +130,23 @@ def _configure_native(workers, calls):
                 return text
 
             extractor.complete = complete_extractor
+
+            maintainer = worker.method.sdk.maintainer._llm
+            complete_maintenance = maintainer.complete
+
+            def complete_maintainer(*, system=None, user="", temperature=0.0):
+                for attempt in range(3):
+                    suffix = ("\nYour previous response failed JSON validation. Return one complete valid JSON "
+                              "object matching the original schema. Escape quotes and newlines inside strings. "
+                              "Do not add markdown or explanatory text.") if attempt else ""
+                    text = complete_maintenance(system=(system or "") + suffix, user=user, temperature=temperature)
+                    if not checks.get("maintainer"):
+                        return text
+                error = ProviderError("native_output_format", category="invalid_native_response")
+                calls.stop("maintainer", error)
+                raise error
+
+            maintainer.complete = complete_maintainer
 
         def check_ingest(checks=checks):
             for module, error in checks.items():
@@ -182,14 +198,15 @@ def _run_episode(args, config, root):
         raise ValueError("output evidence allowlist includes tasks outside the episode")
     recover = getattr(args, "recover_initial_block", False)
     prepared = getattr(args, "recover_prepared_block", False)
-    if sum(bool(value) for value in (recover, prepared, getattr(args, 'resume', False))) > 1:
+    learning = getattr(args, "recover_learning", False)
+    if sum(bool(value) for value in (recover, prepared, learning, getattr(args, 'resume', False))) > 1:
         raise ValueError('choose exactly one recovery/resume mode')
     retry_failed = getattr(args, "retry_failed_initial_task", False)
     if retry_failed and not recover:
         raise ValueError("--retry-failed-initial-task requires --recover-initial-block")
     if recover and getattr(args, "resume", False):
         raise ValueError("choose either clean checkpoint resume or initial-block recovery")
-    resume = getattr(args, "resume", False) or recover or prepared
+    resume = getattr(args, "resume", False) or recover or prepared or learning
     if not resume and root.exists() and any(root.iterdir()):
         raise FileExistsError("team episode requires a new output directory")
     code_sha = subprocess.check_output(
@@ -206,6 +223,7 @@ def _run_episode(args, config, root):
     metadata["execution"] = {
         **metadata["execution"], "native_input_limit_bytes": calls.input_limit("extractor"),
         "extractor_format_retries_per_ingest": 1,
+        "maintainer_format_retries_per_request": 2,
         "task_timeout_seconds": TASK_TIMEOUT, "task_deadline_shared_across_members": True,
         "tool_default_timeout_seconds": TOOL_TIMEOUT_SECONDS, "tool_yield_ms": TOOL_YIELD_MS,
         "tool_timeout_overridable_by_native_exec": True, "process_tool_enabled": True,
@@ -239,6 +257,7 @@ def _run_episode(args, config, root):
                 recover_initial_block=recover,
                 retry_failed_initial_task=retry_failed,
                 recover_prepared_block=prepared,
+                recover_learning=learning,
             ).run(episode)
     finally:
         if calls.path.exists():
@@ -269,6 +288,7 @@ def main():
                      help="with initial-block recovery, archive and retry only its trailing failed task")
     run.add_argument('--recover-prepared-block', action='store_true',
                      help='resume an audited recovery fork inside a learning block without replaying completed tasks')
+    run.add_argument('--recover-learning', action='store_true', help='finish audited partial learning and write a block checkpoint')
     run.add_argument("--verify-runtime", action="store_true", help="record the pinned image and AutoSkill revision")
     summary = commands.add_parser("summarize", help="read existing evidence without model requests")
     summary.add_argument("run_dir", type=Path)

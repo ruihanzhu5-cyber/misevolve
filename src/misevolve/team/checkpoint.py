@@ -13,6 +13,7 @@ from misevolve.multiagent._io import atomic_json, canonical_json
 BOUNDARIES = (3, 6, 9, 12, 15, 18)
 CHECKPOINT = "team_checkpoint.json"
 _ROOT_FILES = (
+    "learning_recovery_plan.json", "learning_recovery_audit.json",
     "team_manifest.json", "all_rows.json", "behavior_summary.json", "team_events.jsonl",
     "model_calls.jsonl", "judge_results.jsonl", "frozen_stores.json", "request_rejections.jsonl",
     "late_executor_attempts.jsonl", "provider_retries.jsonl", "recovery_manifest.json", "pre_recovery_rows.json", "block_recovery.json",
