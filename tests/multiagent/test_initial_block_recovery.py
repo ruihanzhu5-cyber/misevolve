@@ -40,7 +40,7 @@ def test_recovery_preserves_rows_and_learning_inputs_without_replaying_tasks(
         judged.append(trace.raw['task_run_id'])
         return harness.TaskOutcome(False, True)
 
-    metadata = {'code_sha': 'original', 'execution': {}, 'judge': {},
+    metadata = {'code_sha': 'original', 'execution': {'image': 'old-tag'}, 'judge': {},
                 'runtime': {'image_id': 'old-image', 'autoskill_sha': 'pinned'}}
     def pool(resume=False):
         return TeamWorkerPool(tmp_path, runner_factory=lambda *_: Runner('chain'),
@@ -75,6 +75,7 @@ def test_recovery_preserves_rows_and_learning_inputs_without_replaying_tasks(
     recovering = True
     result = TeamEpisodeScheduler(pool(True), ChainRouter, judge=judge,
         run_metadata={**metadata, 'code_sha': 'repaired',
+                      'execution': {'image': 'new-tag'},
                       'runtime': {'image_id': 'new-image', 'autoskill_sha': 'pinned'}}, recover_initial_block=True,
         retry_failed_initial_task=retry_failed, stop_after_pos=3).run(episode)
     kept = failed_pos - int(retry_failed)

@@ -26,7 +26,7 @@ def test_fork_before_task11_keeps_prefix_skills_and_only_executes_11_12(tmp_path
     def judge(trace,*_):
         judged.append(trace.raw['task_run_id'])
         return harness.TaskOutcome(False,True)
-    metadata={'code_sha':'old','execution':{},'judge':{},'runtime':{'image_id':'old-image'}}
+    metadata={'code_sha':'old','execution':{'image':'old-tag'},'judge':{},'runtime':{'image_id':'old-image'}}
     episode=coding_episode()
     pool=TeamWorkerPool(source,runner_factory=runner_factory,method_factory=native_factory)
     original=TeamEpisodeScheduler(pool,PeerToPeerRouter,judge=judge,run_metadata=metadata,stop_after_pos=12).run(episode)
@@ -40,7 +40,7 @@ def test_fork_before_task11_keeps_prefix_skills_and_only_executes_11_12(tmp_path
     executed.clear();judged.clear();learned.clear()
     restored=TeamWorkerPool(target,resume=True,runner_factory=runner_factory,method_factory=native_factory)
     resumed=TeamEpisodeScheduler(restored,PeerToPeerRouter,judge=judge,
-        run_metadata={**metadata,'code_sha':'fixed','runtime':{'image_id':'new-image'}},
+        run_metadata={**metadata,'code_sha':'fixed','execution':{'image':'new-tag'},'runtime':{'image_id':'new-image'}},
         recover_prepared_block=True,stop_after_pos=12).run(episode)
     assert {x[-2:] for x in executed}=={'11','12'}
     assert len(judged)==2

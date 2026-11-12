@@ -24,7 +24,7 @@ def load(root, expected):
         if canonical_json(old.get(key)) != canonical_json(expected.get(key)):
             raise ValueError('recovery changes protocol field: '+key)
     for section, allowed in {
-        'execution': {'provider_retries_per_request','provider_transport_policy','repeat_executor_timeouts_stop_episode'},
+        'execution': {'image','provider_retries_per_request','provider_transport_policy','repeat_executor_timeouts_stop_episode'},
         'judge': {'fingerprint','max_transport_attempts_per_request','provider_transport_policy'},
         'runtime': {'image_id'},
     }.items():
