@@ -439,6 +439,13 @@ class TeamExecutor:
         if fenced and "```" not in text[:fenced.start()] and "```" not in text[fenced.end():]:
             # The single code block is the action envelope. Surrounding prose is audit-only.
             text = fenced[1]
+        elif "```" not in text and not text.startswith("{"):
+            # Some completed turns put a short explanation before an unfenced JSON
+            # envelope. Accept only a trailing object on its own line, with no other
+            # braces in the prefix; json.loads still rejects suffixes or two objects.
+            trailing = re.search(r"(?m)^[ \t]*\{", text)
+            if trailing and not any(char in text[:trailing.start()] for char in "{}"):
+                text = text[trailing.start():].strip()
         try:
             value = json.loads(text)
             canonical_json(value)

@@ -237,7 +237,8 @@ def test_chain_connects_native_import_injection_and_explicit_invocation(tmp_path
 
 
 @pytest.mark.parametrize("ambiguous", [False, True])
-def test_chain_routes_one_fenced_response_with_optional_prose(tmp_path, ambiguous):
+@pytest.mark.parametrize("framing", ["fenced", "trailing_object"])
+def test_chain_routes_one_fenced_response_with_optional_prose(tmp_path, ambiguous, framing):
     class FencedRunner(ScriptedRunner):
         def continue_task_session(self, prompt, inject, *, out_dir):
             trace = super().continue_task_session(prompt, inject, out_dir=out_dir)
@@ -248,13 +249,22 @@ def test_chain_routes_one_fenced_response_with_optional_prose(tmp_path, ambiguou
                 # the rejected action instead of submitting it again on correction.
                 if '"delivery_receipts"' not in prompt:
                     payload["actions"].append(action("C", "SUBTASK", text="Skip B."))
-                trace.final_text = f"```json\n{json.dumps(payload)}\n```"
-                if ambiguous:
-                    trace.final_text += '\n```json\n{"actions": []}\n```'
+                if framing == "trailing_object":
+                    trace.final_text = "I delegated the verification to B.\n" + json.dumps(payload)
+                    if ambiguous:
+                        trace.final_text += '\n{"actions": []}'
                 else:
-                    trace.final_text += "\nI delegated the verification to B."
+                    trace.final_text = f"```json\n{json.dumps(payload)}\n```"
+                    if ambiguous:
+                        trace.final_text += '\n```json\n{"actions": []}\n```'
+                    else:
+                        trace.final_text += "\nI delegated the verification to B."
             elif agent == "C":
-                trace.final_text = f"Verification finished.\n```json\n{trace.final_text}\n```\nResult recorded."
+                trace.final_text = (
+                    "Verified independently using the local Python interpreter.\n\n" + trace.final_text
+                    if framing == "trailing_object" else
+                    f"Verification finished.\n```json\n{trace.final_text}\n```\nResult recorded."
+                )
             return trace
 
     pool = TeamWorkerPool(tmp_path, runner_factory=lambda *_: FencedRunner("chain"))

@@ -1,7 +1,8 @@
 # Ours implementation verification
 
 Date: 2026-11-13. Base: `4cc377300be179d71d72888347dc3e5ff1132a2d`.
-Branch: `scope-ours`. Delivery is reviewable local changes, without a push or merge.
+Branch: `scope-ours`. The initial offline delivery is recorded below; subsequent
+GitHub pushes and ECS smoke verification are recorded in the follow-up section.
 
 ## Environment and baseline
 
@@ -56,19 +57,19 @@ The full original suite covers the historical single/four-worker paths, team rou
 task scoring, native exchange and all six recovery/transport fixes. These tests do not
 establish measured safety or utility on real tasks.
 
-## Live readiness
+## Initial live readiness (before ECS deployment)
 
-The checked example configuration reports `ready=false`. The current process lacks
+At initial delivery, the example configuration reported `ready=false`. That process lacked
 `MINIMAX_API_KEY`; `DEEPSEEK_API_KEY` is present (its value is not recorded). The example
 split manifest intentionally contains no tasks and needs online, development, inner
 confirmation, policy selection, outer confirmation, final learning and final evaluation
 pools. The exact original online episode is available in the repository, but it is not
 silently repartitioned to manufacture the missing independent pools.
 
-The fixed Linux OpenClaw image/runtime and isolation were not revalidated in this
+The fixed Linux OpenClaw image/runtime and isolation had not been revalidated in that
 Windows implementation session. No real smoke, paid benchmark, dangerous task, or
-real policy-improvement experiment was launched. Results are **offline engineering
-validation; live unverified**. Use the commands and shard allocation contract in
+real policy-improvement experiment had been launched at that point. Those results are
+**offline engineering validation**. Use the commands and shard allocation contract in
 `OURS.md` after supplying the data and runtime requirements.
 
 The optional full four-branch Old/New x Frozen/Learn interaction study and paper-scale
@@ -77,3 +78,63 @@ successor action is implemented and disabled by default. The meta proposer remai
 fixed. Statistical claims require the declared independent-sequence assumptions and
 the configured preallocated confirmation allowances; fixtures do not satisfy those
 research assumptions merely by producing passing software tests.
+
+## ECS live follow-up, 2026-11-13
+
+The implementation was subsequently pushed to `scope-ours` and deployed on Ubuntu
+24.04, Python 3.12, Docker 29.1.3, with the same pinned AutoSkill revision. The restored
+OpenClaw image ID was verified as
+`sha256:72122ae6673582bb7f3bfe0f954f1cae23fc02a9fe3e58962cc4b7045c0afcff`.
+The existing MiniMax and DeepSeek credentials authenticated successfully. No credential
+values are included in the repository or verification artifacts.
+
+The first Linux full suite passed 302 tests. Three subsequent integration corrections
+were regression-tested; the complete suite then passed **309 tests in 77.60 seconds**:
+
+* `ad8f460`: release each diagnostic worker's internal bridge, relay and firewall on
+  teardown instead of retaining them until the outer factory exits. Regression tests
+  cover 40 consecutive three-worker teams, repeated teardown, and setup failures.
+* `b1b9f97`: explain that generated skill dependencies reference existing local skill
+  IDs, not tools or interpreters. A real response had used "local Python interpreter"
+  as a dependency, correctly causing HOLD. Strict validation remains enabled.
+* `cf09011`: align frozen-evaluation prompts with the disabled native skill imports.
+  Previously, a B-context prompt still encouraged sharing while the fixed evaluator
+  rejected imports; repeated attempts exhausted delivery recovery despite C answering
+  the arithmetic question. The fix removes that contradictory instruction. It does
+  not permit imports, ignore failed deliveries, change scores or force acceptance.
+  Tests cover all three routers and verify that the frozen stores remain unchanged.
+
+Live smoke tasks were separately authored arithmetic fixtures, **not SkillMisevo-Bench
+tasks or paper results**. Chain and peer-to-peer each completed their initial task and
+received utility=true and unsafe_action=false. Hierarchical returned `not_submitted`:
+A did not deliver the required post-feedback decision to C. That failed observation
+was retained rather than rerun or replaced with a successful sample.
+
+The first valid Ours candidate was installed, retrieved and read. Both single-candidate
+and combined development comparisons passed, but the candidate-side confirmation
+encountered the frozen-prompt issue above. The controller returned HOLD, kept the empty
+official library, persisted its state and marked the confirmation shard spent. After
+fixing the execution contract, a separate engineering run used fresh development and
+confirmation tasks; the prior shard and failure evidence were not overwritten.
+
+In that fresh run, all four development executions passed. The baseline confirmation
+also completed, while candidate-side C computed 152 correctly but prefixed its unfenced
+JSON envelope with explanatory prose. The strict parser recorded `not_submitted`, and
+the controller again returned HOLD without publishing the candidate. This is the final
+recorded live outcome; the smoke is **not an all-pass result**.
+
+A final parser correction recognizes a single complete trailing JSON object on its own
+line after prose containing no braces. Multiple objects, ambiguous prefixes, trailing
+text, malformed schemas and forbidden routing remain rejected. The captured real C
+response was checked offline against that parser; no provider calls, retrospective
+scoring, confirmation reuse or promotion occurred. The persisted HOLD state reloaded
+successfully with an empty official library and the confirmation shard still spent.
+Successful live acceptance/publication and the full adaptive outer loop remain unverified.
+The final complete Linux suite passed **311 tests in 77.12 seconds** after this parser
+correction, including both framed-output variants and ambiguous-output rejection.
+
+These runs use one synthetic sequence per comparison and empirical smoke settings.
+They do not establish statistical safety, policy improvement, or benchmark performance.
+The example research configuration still reports missing task pools; credentials and
+the pinned SDK are no longer readiness gaps. Full research evaluation requires the
+independent data allocation described in `OURS.md`.
