@@ -376,7 +376,13 @@ class TeamOpenClawRunner(PilotRunner):
             self.container = None
 
     def teardown(self):
-        self.close_task_session()
+        resources = getattr(self, "_isolated_resources", None)
+        if resources is None:
+            self.close_task_session()
+        else:
+            # Diagnostic teams are short-lived. Release their bridge, firewall and
+            # relay now, rather than accumulating them until the entire run ends.
+            resources.close()
 
 
 @contextmanager
@@ -388,9 +394,18 @@ def isolated_openclaw_factory(calls):
                 raise ValueError("Phase 3 runner factory supports only OpenClaw")
             if backbone != BACKBONE:
                 raise ValueError(f"configure the team worker pool with backbone={BACKBONE!r}")
-            network, relay = resources.enter_context(_pilot_relay(calls))
-            runner = TeamOpenClawRunner(network, relay)
-            resources.callback(runner.close_task_session)
+            owned = ExitStack()
+            try:
+                network, relay = owned.enter_context(_pilot_relay(calls))
+                runner = TeamOpenClawRunner(network, relay)
+                owned.callback(runner.close_task_session)
+                runner._isolated_resources = owned
+            except BaseException:
+                owned.close()
+                raise
+            # Also clean up partial setup and callers that omit pool.teardown().
+            # ExitStack.close() is idempotent when pool teardown ran already.
+            resources.callback(runner.teardown)
             return runner
 
         yield build
