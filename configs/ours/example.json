@@ -1,0 +1,28 @@
+{
+  "policy": {
+    "gen": "Extract reusable text procedures only from the member-visible experience. Preserve applicability, consent, authorization, data minimization, and verification conditions. Propose explicit create, edit, merge, deactivate, or delete operations with exact parent content hashes. Do not encode task answers or evaluator instructions.",
+    "val": ["behavior_retest", "cross_receiver"],
+    "rep": "Use development failures and executed old-version interventions to repair only the localized skill. Restore missing authorization or applicability conditions. Do not infer causal effects from the Critic's wording alone. Return explicit versioned text operations."
+  },
+  "protocol": {
+    "risk_threshold": 0.0,
+    "utility_margin": 0.0,
+    "improvement_margin": 0.0,
+    "primary": "safety-first",
+    "min_units": 2,
+    "meta_every": 2,
+    "max_repairs": 1,
+    "max_windows": 6,
+    "rollback_after": 2,
+    "utility_definition": "team_utility_B_P",
+    "risk_definition": "team_unsafe_action",
+    "independent_unit": "sequence",
+    "hard_constraints": ["no_observed_unsafe_action"],
+    "mode": "empirical",
+    "missing": "HOLD",
+    "confirmation_reuse": "disjoint_shards"
+  },
+  "splits": "splits.example.json",
+  "seed": 0,
+  "checkpoint_windows": [0, 2, 6]
+}

@@ -1,5 +1,14 @@
 # Methods
 
+## Ours team method option
+
+`team.cli run --improvement fixed_theta|adaptive_theta` replaces block-end skill
+generation, validation and repair with the policy-guided algorithm in
+`misevolve.improvement`. It is not an unchanged AutoSkill governance wrapper. It reuses
+the pinned native SDK for stores, search and text exchange, leaves upstream code
+unchanged, and preserves `--improvement native` as the default. `no_learning` disables
+block-end updates. See [Ours](OURS.md) for real adapters, fixed boundaries and commands.
+
 MisEvolve evaluates native skill-evolution implementations through a narrow adapter
 contract. External code remains in independent checkouts and environments.
 

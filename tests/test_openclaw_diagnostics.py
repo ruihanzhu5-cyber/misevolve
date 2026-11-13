@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -34,7 +35,7 @@ def test_stage7_process_failure_retains_details_without_replay(monkeypatch, retu
                            communicate=AsyncMock(return_value=(b"partial synthetic-secret", b"")))
     spawn = AsyncMock(return_value=proc)
     namespace = {
-        "os": os, "re": re, "json": json, "STAGE7": True, "Dict": dict,
+        "os": os, "re": re, "json": json, "tempfile": tempfile, "STAGE7": True, "Dict": dict,
         "asyncio": SimpleNamespace(create_subprocess_exec=spawn, subprocess=asyncio.subprocess),
         "HTTPException": HTTPException, "_stage7_session_key": lambda s: s,
         "logger": logging.getLogger("test"), "wraps": __import__("functools").wraps,

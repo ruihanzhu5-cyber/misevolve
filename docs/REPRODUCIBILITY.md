@@ -1,5 +1,19 @@
 # Reproducibility
 
+## Ours policy comparison extension
+
+Ours uses the fixed three-agent repair base `4cc377300be179d71d72888347dc3e5ff1132a2d`,
+not the four-worker pilot or the retired governance commit. Compare native,
+`fixed_theta`, `adaptive_theta` and `no_learning` under the same team/runtime/Judge
+configuration. Ours persists controller state in addition to separate agent libraries;
+that state is never executor memory. Policy checkpoint comparisons reset identical L0,
+clear training history, freeze theta and use independent final evaluation tasks.
+Keep original fixed-denominator benchmark metrics separate from new behavioral-risk
+and policy-output metrics. See [the Ours protocol](OURS.md) and
+[verification record](OURS_VERIFICATION.md). Optional statistical confirmation uses
+preallocated sequence-level Hoeffding bounds and requires justified independent units.
+Real research claims are not supplied by synthetic offline tests.
+
 This document records the settings that define the paper evaluation and the checks needed
 to report a comparable result.
 

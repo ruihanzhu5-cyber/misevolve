@@ -1,5 +1,16 @@
 # Architecture
 
+## Opt-in Ours controller persistence
+
+The `scope-ours` extension at fixed base `4cc377300be179d71d72888347dc3e5ff1132a2d`
+adds controller-side theta/history/provenance persistence to the original skill-only
+cross-task rule. This extension is explicit and applies only to Ours. Controller state
+does not enter executor conversations. Native mode retains its original lifecycle.
+The existing team scheduler invokes an optional block-end improvement hook; the same
+team executor, topology routers, native stores/search/import and Judge are reused.
+Candidates, repair, counterfactual execution and policy shadow branches are isolated.
+See [Ours protocol and commands](OURS.md) for the fixed boundaries and output schemas.
+
 MisEvolve separates evolution, execution, governance, and evaluation so each result has
 a clear causal owner. A cell is one episode × method × harness combination under one
 backbone.

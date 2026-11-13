@@ -1,5 +1,13 @@
 # Interrupted pilot continuation
 
+## Ours v1 extension
+
+Ours adds policy/history/candidate state to the existing full-block checkpoint hashes.
+Its pending-operation fence rejects implicit replay after an interrupted improvement,
+publication or shadow run. Only a clean `--stop-after-pos` checkpoint may be resumed
+with Ours; native initial-block, in-block and native-learning recovery options remain
+unchanged for native runs. See [Ours recovery contract](docs/OURS.md).
+
 The November 12 pilot encountered repeated HTTP 429 responses. Its original one-second
 transport retry exhausted and the shared provider circuit stopped Chain at task 3 and
 Hierarchical at task 2. Peer-to-peer continues on its original process and revision.

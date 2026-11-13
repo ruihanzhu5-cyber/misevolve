@@ -6,14 +6,13 @@ import argparse
 import json
 import subprocess
 import uuid
-from collections import Counter
 from pathlib import Path
 from threading import Condition
 
+from misevolve._provider_retry import TEAM_RETRY_POLICY
 from misevolve._stage7_api import DEEPSEEK_MODEL, ProviderCalls, ProviderError, Scope
 from misevolve._stage7_openclaw import BACKBONE
-from misevolve._provider_retry import TEAM_RETRY_POLICY
-from misevolve.multiagent._io import append_jsonl, atomic_json, read_jsonl
+from misevolve.multiagent._io import append_jsonl, atomic_json
 from misevolve.paths import repo_root
 from misevolve.run import load_episode
 from misevolve.stage7 import _runtime, _trace_native
@@ -193,12 +192,23 @@ def run_episode(args, config):
 
 def _run_episode(args, config, root):
     episode = load_episode(args.episode)
+    improvement_mode = getattr(args, "improvement", "native")
+    ours_config = None
+    if improvement_mode in {"fixed_theta", "adaptive_theta"}:
+        from misevolve.improvement.config import load_config
+
+        if not getattr(args, "improvement_config", None):
+            raise ValueError("Ours requires --improvement-config with explicit protocol and split manifest")
+        ours_config = load_config(args.improvement_config, root / "improvement" / "access.jsonl")
+        ours_config[2].validate_online(episode)
     valid_ids = {task["instance_id"] for task in episode["task_sequence"]}
     if set(config["judge"]["output_evidence_tasks"]) - valid_ids:
         raise ValueError("output evidence allowlist includes tasks outside the episode")
     recover = getattr(args, "recover_initial_block", False)
     prepared = getattr(args, "recover_prepared_block", False)
     learning = getattr(args, "recover_learning", False)
+    if improvement_mode != "native" and (recover or prepared or learning):
+        raise ValueError("Ours/no-learning supports clean block --resume only; native recovery is unchanged")
     if sum(bool(value) for value in (recover, prepared, learning, getattr(args, 'resume', False))) > 1:
         raise ValueError('choose exactly one recovery/resume mode')
     retry_failed = getattr(args, "retry_failed_initial_task", False)
@@ -237,6 +247,14 @@ def _run_episode(args, config, root):
     }
     metadata.update(run_id=calls.run_id, replicate_id=args.replicate_id, code_sha=code_sha,
                     artifact_cache=str(cache_dir))
+    if improvement_mode != "native":
+        from misevolve.improvement.policy import BASE_SHA, digest
+
+        metadata["improvement"] = {"mode": improvement_mode, "base_sha": BASE_SHA,
+                                   "source_hash": digest({p.relative_to(repo_root()).as_posix():
+                                                          p.read_text(encoding="utf-8")
+                                                          for p in sorted((repo_root() / "src").rglob("*.py"))}),
+                                   **(ours_config[3] if ours_config else {})}
     if getattr(args, "verify_runtime", False):
         metadata["runtime"] = _runtime()
 
@@ -246,9 +264,43 @@ def _run_episode(args, config, root):
     try:
         with isolated_openclaw_factory(calls) as factory:
             pool = TeamWorkerPool(root, runner_factory=factory, backbone=args.backbone, resume=resume)
+            controller = None
+
+            def configure_workers(workers):
+                nonlocal controller
+                if improvement_mode == "native":
+                    _configure_native(workers, calls)
+                elif ours_config:
+                    from misevolve.improvement.controller import Controller
+                    from misevolve.improvement.model import Model
+                    from misevolve.improvement.runtime import Runtime, snapshot
+
+                    policy, protocol, splits, _ = ours_config
+                    runtime = Runtime(root / "improvement" / "branches", runner_factory=factory,
+                                      backbone=args.backbone, router_type=ROUTERS[args.protocol], judge=judge,
+                                      configuration=metadata)
+                    controller = Controller(root / "improvement", policy=policy, protocol=protocol, splits=splits,
+                                            model=Model(calls, root / "improvement" / "model_requests.jsonl"),
+                                            runtime=runtime, adaptive=improvement_mode == "adaptive_theta",
+                                            resume=resume)
+                    if resume and snapshot(workers) != controller.store.get(controller.store.state["library"]):
+                        raise ValueError("Ours controller library differs from the restored native stores")
+                    if not resume and 0 in ours_config[3]["checkpoint_windows"]:
+                        atomic_json(root / "improvement" / "checkpoints" / "0.json", policy.to_dict())
+
+            def improve(workers, traces, **kwargs):
+                if improvement_mode == "no_learning":
+                    return {}
+                events = controller.on_block(workers, traces, **kwargs)
+                if controller.store.state["window"] in ours_config[3]["checkpoint_windows"]:
+                    atomic_json(root / "improvement" / "checkpoints" / f"{controller.store.state['window']}.json",
+                                controller.policy.to_dict())
+                return events
+
             return TeamEpisodeScheduler(
                 pool, ROUTERS[args.protocol], judge=judge, artifact_judge=judge.artifact,
-                configure_workers=lambda workers: _configure_native(workers, calls), run_metadata=metadata,
+                configure_workers=configure_workers, run_metadata=metadata,
+                improvement_hook=None if improvement_mode == "native" else improve,
                 stop_after_pos=getattr(args, "stop_after_pos", None), ensure_healthy=ensure_healthy,
                 before_checkpoint=calls.drain_executor,
                 recover_initial_block=recover,
@@ -287,6 +339,9 @@ def main():
                      help='resume an audited recovery fork inside a learning block without replaying completed tasks')
     run.add_argument('--recover-learning', action='store_true', help='finish audited partial learning and write a block checkpoint')
     run.add_argument("--verify-runtime", action="store_true", help="record the pinned image and AutoSkill revision")
+    run.add_argument("--improvement", choices=("native", "fixed_theta", "adaptive_theta", "no_learning"),
+                     default="native")
+    run.add_argument("--improvement-config", type=Path)
     summary = commands.add_parser("summarize", help="read existing evidence without model requests")
     summary.add_argument("run_dir", type=Path)
     summary.add_argument("--out", type=Path)

@@ -161,7 +161,8 @@ class GlobalSkillRegistry:
                            for item in event.get("invocation_evidence", [])
                            if valid_evidence(item.get("evidence", {}), "explicit_invocation")]
                 provenance = {
-                    "transformation_type": "native_update", "source_event_id": event["event_id"],
+                    "transformation_type": ("policy_guided_update" if event.get("event") == "ours_publication"
+                                            else "native_update"), "source_event_id": event["event_id"],
                     "retrieved_parent_ids": list(dict.fromkeys(gid for gid in retrieved if gid)),
                     "invoked_parent_ids": list(dict.fromkeys(gid for gid in invoked if gid)),
                 }
@@ -176,7 +177,7 @@ class GlobalSkillRegistry:
                     else:
                         provenance["unresolved_predecessor"] = skill_reference(before)
                 artifacts.append(self.register_skill(
-                    owner_agent, bundle, [task_id], provenance,
+                    owner_agent, bundle, event.get("source_task_ids", [task_id]), provenance,
                     block_id=block_id,
                 ))
         return artifacts

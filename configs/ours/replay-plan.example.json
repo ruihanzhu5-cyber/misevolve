@@ -1,0 +1,9 @@
+{
+  "checkpoints": [
+    {"label": "early", "path": "../../results/ours/improvement/checkpoints/0.json", "window": 0},
+    {"label": "middle", "path": "../../results/ours/improvement/checkpoints/2.json", "window": 2},
+    {"label": "late", "path": "../../results/ours/improvement/checkpoints/6.json", "window": 6}
+  ],
+  "sequences": ["unseen-sequence-1", "unseen-sequence-2"],
+  "primary_comparison": ["early", "late"]
+}

@@ -29,6 +29,7 @@ class TeamEpisodeScheduler:
         self, pool: TeamWorkerPool, router_type, *, judge, artifact_judge=None, max_rounds=8,
         run_metadata=None, configure_workers=None, stop_after_pos=None, ensure_healthy=None, before_checkpoint=None,
         recover_initial_block=False, retry_failed_initial_task=False, recover_prepared_block=False, recover_learning=False,
+        improvement_hook=None,
     ):
         self.pool = pool
         self.router_type = router_type
@@ -46,6 +47,7 @@ class TeamEpisodeScheduler:
         self.recover_prepared_block = recover_prepared_block
         self.block_recovery = None
         self.recover_learning = recover_learning
+        self.improvement_hook = improvement_hook
         if retry_failed_initial_task and not recover_initial_block:
             raise ValueError("retry of a failed initial task requires initial-block recovery")
 
@@ -86,6 +88,8 @@ class TeamEpisodeScheduler:
             "tasks": [{key: task[key] for key in ("pos", "kind", "round", "instance_id")} for task in tasks],
             "episode_sha256": hashlib.sha256(canonical_json(episode).encode("utf-8")).hexdigest(),
         }
+        if "improvement" in self.run_metadata:
+            manifest["improvement"] = self.run_metadata["improvement"]
         if self.recover_prepared_block:
             from .block_recovery import load
             self.block_recovery, rows = load(root, manifest)
@@ -205,15 +209,20 @@ class TeamEpisodeScheduler:
             if kind != "P":
                 atomic_json(root / "progress.json", {"phase": "native_evolution", "block_id": block_id,
                                                     "last_task_id": block[-1]["instance_id"]})
+                improvement_events = (self.improvement_hook(workers, traces, block_id=block_id, kind=kind)
+                                      if self.improvement_hook is not None else None)
                 for agent, local_traces in traces.items():
                     if not local_traces:
                         continue
                     worker = workers[agent]
-                    worker.method.evolve_batch(local_traces, [], kind=kind, round_idx=block[0]["round"])
+                    if improvement_events is None:
+                        worker.method.evolve_batch(local_traces, [], kind=kind, round_idx=block[0]["round"])
                     if self.ensure_healthy is not None:
                         self.ensure_healthy()
-                    events = worker.method._last_evolution_events
-                    log.record("NATIVE_MAINTENANCE", block[-1]["instance_id"], agent_id=agent, block_id=block_id,
+                    events = (worker.method._last_evolution_events if improvement_events is None
+                              else improvement_events.get(agent, []))
+                    log.record("NATIVE_MAINTENANCE" if improvement_events is None else "OURS_MAINTENANCE",
+                               block[-1]["instance_id"], agent_id=agent, block_id=block_id,
                                ingest_event_ids=[event["event_id"] for event in events])
                     for artifact in registry.register_evolution_events(agent, events, block_id=block_id):
                         worker.remember_local_version(artifact.local_skill_key, artifact.global_skill_id)
