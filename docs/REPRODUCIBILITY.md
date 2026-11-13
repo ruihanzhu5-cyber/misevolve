@@ -1,8 +1,17 @@
 # Reproducibility
 
+The pinned OpenClaw runtime can add `modelPromptProjection` (version 1 and text)
+to a previously captured user-role record (including internal `exec` completion notices) when resuming a session.
+The team reader accepts only that one-time addition when the record ID, message
+body, provenance and all other metadata are unchanged. Other prefix changes still
+fail transcript integrity checks. Accepted additions retain both record hashes and
+the projection in `_transcript_annotations`; each turn also retains its complete
+`session_raw.jsonl` observation. No prior command or message is replayed as a new
+event because of an annotation.
+
 ## JSON action-envelope correction
 
-Team delivery policy v3 records one format correction per member in the manifest,
+Team delivery policy v4 records two format corrections per member in the manifest,
 separate from one delivery correction. Both use the original rounds and deadline.
 Malformed action JSON remains rejected; no host-side quote repair or score rewrite
 is performed. Old checkpoints from another policy/code version are not resumed.

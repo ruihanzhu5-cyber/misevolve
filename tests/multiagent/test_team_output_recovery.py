@@ -37,7 +37,7 @@ def execute(executor, tmp_path):
 
 @pytest.mark.parametrize("bad_agent", ["B", "C"])
 @pytest.mark.parametrize("recover", [True, False])
-def test_malformed_message_has_one_correction_and_no_partial_dispatch(tmp_path, bad_agent, recover):
+def test_malformed_message_has_bounded_correction_and_no_partial_dispatch(tmp_path, bad_agent, recover):
     class Runner(ScriptedRunner):
         def continue_task_session(self, prompt, inject, *, out_dir):
             trace = super().continue_task_session(prompt, inject, out_dir=out_dir)
@@ -56,9 +56,11 @@ def test_malformed_message_has_one_correction_and_no_partial_dispatch(tmp_path, 
         result = execute(executor, tmp_path)
         events = read_jsonl(executor.log.path)
         corrections = [e for e in events if e["event_type"] == "OUTPUT_FORMAT_CORRECTION_REQUESTED"]
-        assert len(corrections) == 1 and corrections[0]["agent_id"] == bad_agent
+        assert len(corrections) == (1 if recover else 2) and corrections[0]["agent_id"] == bad_agent
+        assert corrections[0]["validation_error"]["error_type"] == "JSONDecodeError"
+        assert corrections[0]["validation_error"]["line"] >= 1
         assert corrections[0]["actions_dispatched"] is False
-        assert len(result.runtimes[bad_agent].traces) == 2
+        assert len(result.runtimes[bad_agent].traces) == (2 if recover else 3)
         delivered = [(e["sender_id"], e["receiver_id"]) for e in events if e["event_type"] == "MESSAGE_DELIVERED"]
         assert delivered.count(("A", "B")) == 1
         assert delivered.count(("B", "C")) == (1 if recover or bad_agent == "C" else 0)
@@ -73,6 +75,41 @@ def test_malformed_message_has_one_correction_and_no_partial_dispatch(tmp_path, 
             assert result.execution_status == "not_submitted"
             assert result.failure == {"agent_id": bad_agent, "phase": "output_validation",
                                       "stop_reason": "output_format_recovery_exhausted"}
+    finally:
+        pool.teardown()
+
+
+def test_second_format_correction_can_salvage_the_original_task(tmp_path):
+    class Runner(ScriptedRunner):
+        bad_turns = 0
+
+        def continue_task_session(self, prompt, inject, *, out_dir):
+            trace = super().continue_task_session(prompt, inject, out_dir=out_dir)
+            if self.active[2] == "B":
+                self.bad_turns += 1
+                if self.bad_turns <= 2:
+                    trace.final_text = malformed_shell_envelope()
+            return trace
+
+    pool, executor = setup(tmp_path, lambda *_: Runner("chain"))
+    try:
+        result = execute(executor, tmp_path)
+        assert result.execution_status == "completed" and result.submitter == "C"
+        assert len(result.runtimes["B"].traces) == 3
+        assert sum(e["event_type"] == "OUTPUT_FORMAT_CORRECTION_REQUESTED"
+                   for e in read_jsonl(executor.log.path)) == 2
+    finally:
+        pool.teardown()
+
+
+def test_literal_newline_and_tab_in_json_strings_are_preserved_without_a_model_retry(tmp_path):
+    pool, executor = setup(tmp_path, lambda *_: ScriptedRunner("chain"))
+    try:
+        text = '{"actions":[], "final_answer":"line one\nline two\tend"}'
+        assert executor._response(text, "task", "C")["final_answer"] == "line one\nline two\tend"
+        events = read_jsonl(executor.log.path)
+        assert events[-1]["event_type"] == "OUTPUT_JSON_CONTROL_CHARACTERS_RECOVERED"
+        assert not any(e["event_type"] == "INVALID_AGENT_OUTPUT" for e in events)
     finally:
         pool.teardown()
 

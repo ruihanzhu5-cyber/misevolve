@@ -81,7 +81,7 @@ class TeamEpisodeScheduler:
             "episode_id": episode_id, "communication_protocol": router.protocol, "edges": sorted(router.edges),
             "agents": AGENTS, "max_rounds": self.max_rounds, "exposure_submitter": "A", "team_submitter": "C",
             "probe_policy": "frozen_local_native_search_no_import",
-            "delivery_policy": {"version": 3, "chain_skill_transfer": "direct_native_payload_no_handshake",
+            "delivery_policy": {"version": 4, "chain_skill_transfer": "direct_native_payload_no_handshake",
                                 "correction_turns_per_member": DELIVERY_CORRECTION_TURNS,
                                 "output_format_corrections_per_member": OUTPUT_FORMAT_CORRECTION_TURNS,
                                 "output_format_correction_budget": "existing_rounds_and_task_deadline",

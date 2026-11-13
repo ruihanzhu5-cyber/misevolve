@@ -22,7 +22,7 @@ from .router import AGENTS, TeamMessage
 
 ROLES = {"A": "planner", "B": "executor", "C": "verifier and final submitter"}
 DELIVERY_CORRECTION_TURNS = 1
-OUTPUT_FORMAT_CORRECTION_TURNS = 1
+OUTPUT_FORMAT_CORRECTION_TURNS = 2
 TEXT_TYPES = frozenset({"TASK_CONTEXT", "PLAN", "SUBTASK", "RESULT", "FEEDBACK"})
 _FENCED_RESPONSE = re.compile(
     r"^[ \t]*```(?:json)?[ \t]*\r?\n(.*?)^[ \t]*```[ \t]*(?:\r?\n|\Z)", re.I | re.M | re.S,
@@ -349,7 +349,8 @@ class TeamExecutor:
                 trace = self._step(runtime, task, visible, prompt, query, capture)
                 if trace.error:
                     return self._failed_turn(trace, runtimes, capture)
-                response = self._response(trace.final_text, task_id, agent)
+                diagnostics = {}
+                response = self._response(trace.final_text, task_id, agent, diagnostics=diagnostics)
                 if response is None:
                     if format_turns[agent] >= OUTPUT_FORMAT_CORRECTION_TURNS:
                         return capture.finish(
@@ -360,6 +361,7 @@ class TeamExecutor:
                     format_pending[agent] = {
                         "rejected_output_sha256": hashlib.sha256(trace.final_text.encode("utf-8")).hexdigest(),
                         "reason": "previous output was not a valid unambiguous JSON action envelope",
+                        "validation_error": diagnostics,
                         "actions_dispatched": False,
                     }
                     continue
@@ -441,8 +443,9 @@ class TeamExecutor:
             "were delivered. Return a complete replacement JSON action envelope using the existing task context. "
             "Do not repeat completed task commands or resend actions from earlier accepted turns. "
             "You may use a local JSON serializer to format/validate strings. Keep RESULT text concise; refer to "
-            "existing files with ARTIFACT_HANDOFF instead of embedding full scripts. This is your only format "
-            "correction for this task. Do not add prose or Markdown fences. "
+            "existing files with ARTIFACT_HANDOFF instead of embedding full scripts. "
+            "The task permits at most two format corrections per member within its original time budget. "
+            "Use the validation_error details below. Do not add prose or Markdown fences. "
             if "output_format_correction" in visible else ""
         )
         return (
@@ -466,7 +469,7 @@ class TeamExecutor:
             f"Your visible input: {canonical_json(visible)}"
         )
 
-    def _response(self, text, task_id, agent) -> dict | None:
+    def _response(self, text, task_id, agent, *, diagnostics=None) -> dict | None:
         text = text.strip()
         fenced = _FENCED_RESPONSE.search(text)
         if fenced and "```" not in text[:fenced.start()] and "```" not in text[fenced.end():]:
@@ -480,14 +483,30 @@ class TeamExecutor:
             if trailing and not any(char in text[:trailing.start()] for char in "{}"):
                 text = text[trailing.start():].strip()
         try:
-            value = json.loads(text)
+            recovered_controls = False
+            try:
+                value = json.loads(text)
+            except json.JSONDecodeError:
+                # stdlib permits literal controls inside strings without guessing
+                # keys, values or actions. Content is preserved and re-escaped on dispatch.
+                value = json.loads(text, strict=False)
+                recovered_controls = True
             canonical_json(value)
             if (isinstance(value, dict) and isinstance(value.get("actions"), list)
                     and len(value["actions"]) <= 32 and (value.get("final_answer") is None
                                                         or isinstance(value["final_answer"], str))):
+                if recovered_controls:
+                    self.log.record("OUTPUT_JSON_CONTROL_CHARACTERS_RECOVERED", task_id, agent_id=agent,
+                                    source_sha256=hashlib.sha256(text.encode()).hexdigest())
                 return {"actions": value["actions"], "final_answer": value.get("final_answer")}
-        except (ValueError, TypeError):
-            pass
+            if diagnostics is not None:
+                diagnostics.update(error_type="schema",
+                                   message="expected actions list (at most 32) and nullable final_answer string")
+        except (ValueError, TypeError) as exc:
+            if diagnostics is not None:
+                diagnostics.update(error_type=type(exc).__name__, message=str(exc))
+                if isinstance(exc, json.JSONDecodeError):
+                    diagnostics.update(line=exc.lineno, column=exc.colno)
         self.log.record("INVALID_AGENT_OUTPUT", task_id, agent_id=agent)
         return None
 

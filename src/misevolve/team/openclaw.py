@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import secrets
 import uuid
 from contextlib import ExitStack, contextmanager
+from copy import deepcopy
 from pathlib import Path, PurePosixPath
 from subprocess import TimeoutExpired
 from tempfile import TemporaryDirectory
@@ -84,6 +86,54 @@ def _is_exec_notice(message):
         and isinstance(event_key, str)
         and event_key.startswith("exec:")
     )
+
+
+def _history_prefix_annotations(previous, observed):
+    """Permit the pinned runtime's one-time model projection on a user-role record.
+
+    OpenClaw 2026.11.1 annotates a queued completion when it next enters the
+    model context. IDs, content, provenance, tool evidence and existing metadata
+    remain immutable. Return None for any other prefix change.
+    """
+    if len(observed) < len(previous):
+        return None
+    annotations = []
+    for before, after in zip(previous, observed, strict=False):
+        if before == after:
+            continue
+        if not isinstance(before, dict) or not isinstance(after, dict):
+            return None
+        if (before.get("type") != "message" or after.get("type") != "message"
+                or not isinstance(before.get("id"), str) or not before["id"]
+                or before["id"] != after.get("id")):
+            return None
+        old, new = before.get("message"), after.get("message")
+        if not isinstance(old, dict) or not isinstance(new, dict):
+            return None
+        if old.get("role") != "user" or new.get("role") != "user":
+            return None
+        old_meta, new_meta = old.get("__openclaw", {}), new.get("__openclaw", {})
+        if not isinstance(old_meta, dict) or not isinstance(new_meta, dict):
+            return None
+        if "modelPromptProjection" in old_meta:
+            return None
+        projection = new_meta.get("modelPromptProjection")
+        if (not isinstance(projection, dict) or set(projection) != {"version", "text"}
+                or type(projection["version"]) is not int or projection["version"] != 1
+                or not isinstance(projection["text"], str)):
+            return None
+        stripped = deepcopy(after)
+        del stripped["message"]["__openclaw"]["modelPromptProjection"]
+        if "__openclaw" not in old and not stripped["message"]["__openclaw"]:
+            del stripped["message"]["__openclaw"]
+        if stripped != before:
+            return None
+        def fingerprint(value):
+            return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        annotations.append({"record_id": before["id"], "field": "message.__openclaw.modelPromptProjection",
+                            "before_sha256": fingerprint(before), "after_sha256": fingerprint(after),
+                            "projection": deepcopy(projection)})
+    return annotations
 
 
 class TeamOpenClawRunner(PilotRunner):
@@ -217,6 +267,7 @@ class TeamOpenClawRunner(PilotRunner):
         evidence = execution_evidence([{"message": message} for message in messages])
         # Only the transcript can supply assistant output. Keep the POST body for audit.
         raw = self._history_to_raw(delta, "", session_id)
+        raw["_transcript_annotations"] = getattr(self, "_transcript_annotations", [])
         raw["prompt_response"] = response
         raw["_skill_injection"] = injection
         raw["_skill_runtime_map"] = _runtime_skill_map(injection)
@@ -277,7 +328,9 @@ class TeamOpenClawRunner(PilotRunner):
         if tool_timeouts and stop_reason in {"error", "toolUse", "tool_use", "missing_terminal"}:
             stop_reason = "tool_timeout"
         completed = stop_reason in NORMAL_STOP_REASONS
-        is_timeout = stop_reason in {"task_timeout", "model_request_timeout", "provider_recovery_timeout", "tool_timeout"}
+        is_timeout = stop_reason in {
+            "task_timeout", "model_request_timeout", "provider_recovery_timeout", "tool_timeout",
+        }
         raw["_team_execution"] = {
             **evidence, "execution_status": "completed" if completed else "timeout" if is_timeout else "failed",
             "transcript_status": transcript_status, "stop_reason": stop_reason, "http_status": status,
@@ -297,6 +350,7 @@ class TeamOpenClawRunner(PilotRunner):
         return trajectory
 
     def _transcript_delta(self, session_id):
+        self._transcript_annotations = []
         try:
             if self._frozen:
                 status, data = self._read_frozen_history(session_id)
@@ -308,8 +362,10 @@ class TeamOpenClawRunner(PilotRunner):
         if status != 200 or not isinstance(data, dict) or not isinstance(data.get("history"), list):
             return [], "transcript_unavailable"
         history = data["history"]
-        if history[:len(self._history)] != self._history:
+        annotations = _history_prefix_annotations(self._history, history)
+        if annotations is None:
             return [], "transcript_session_mismatch"
+        self._transcript_annotations = annotations
         delta = history[len(self._history):]
         if not delta:
             return [], "transcript_empty"
