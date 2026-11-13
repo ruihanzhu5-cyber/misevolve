@@ -24,6 +24,14 @@ evaluations both suppress positive transfer guidance; Store guards remain.
 Evaluation records retain the actual execution failure in addition to missing
 score status.
 
+The first real M block returned more candidates than its declared limit of one,
+so the run correctly held the update before any development or confirmation.
+Generation/repair now expose that fixed limit prominently and allow at most one
+structural correction request (`max_structure_retries=1`). Both responses remain
+in the journal. No list is truncated, thresholds are unchanged, and a second
+invalid response remains HOLD. This is format correction before evaluation, not
+adaptive reuse of confirmation results. Start a fresh run for this code version.
+
 Build the auditable source-episode partition offline:
 
 ```bash

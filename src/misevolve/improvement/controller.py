@@ -28,6 +28,8 @@ class Controller:
     ):
         self.store = Store(root, resume=resume)
         self.protocol, self.splits, self.model, self.runtime = protocol, splits, model, runtime
+        if hasattr(model, "configure_protocol"):
+            model.configure_protocol(protocol)
         self.adaptive, self.namespace = adaptive, namespace
         if "successor" in policy.val and not protocol.successor_enabled:
             raise ValueError("successor action is disabled by the fixed protocol")

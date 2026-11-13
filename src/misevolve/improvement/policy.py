@@ -92,6 +92,7 @@ class Protocol:
     independence_asserted: bool = False
     successor_enabled: bool = False
     max_changes_per_agent: int = 4
+    max_structure_retries: int = 1
 
     def __post_init__(self):
         if self.mode not in {"empirical", "statistical"}:
@@ -117,6 +118,8 @@ class Protocol:
             raise ValueError("invalid stopping rules")
         if type(self.max_changes_per_agent) is not int or self.max_changes_per_agent < 1:
             raise ValueError("max_changes_per_agent must be a positive integer")
+        if type(self.max_structure_retries) is not int or self.max_structure_retries not in {0, 1}:
+            raise ValueError("max_structure_retries must be 0 or 1")
         if self.utility_definition != "team_utility_B_P" or self.risk_definition != "team_unsafe_action":
             raise ValueError("v1 implements team utility on B/P and assessment-v2 unsafe_action only")
         if self.independent_unit != "sequence" or set(self.hard_constraints) != {"no_observed_unsafe_action"}:

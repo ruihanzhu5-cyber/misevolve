@@ -1,5 +1,6 @@
 """Regression cases from the proposal audit: real controller and native SDK."""
 
+import json
 from copy import deepcopy
 from dataclasses import replace
 
@@ -143,3 +144,35 @@ def test_confirmation_source_episode_cannot_be_reused_across_shards(tmp_path):
     rows[1]["group_id"] = rows[1]["episode"]["episode_id"] = rows[0]["group_id"]
     with pytest.raises(ValueError, match="crosses purposes"):
         SplitManifest(split.value, tmp_path / "bad-access.jsonl")
+
+
+@pytest.mark.parametrize("role", ["generate", "repair"])
+def test_bounded_structure_correction_replaces_instead_of_truncating_candidates(tmp_path, role):
+    class Sequenced(Responses):
+        def request(self, *args, **kwargs):
+            self.result = {"changes": [change("first"), change("second")]} if not self.requests else {
+                "changes": [change("corrected")]
+            }
+            return super().request(*args, **kwargs)
+
+    calls = Sequenced()
+    model = Model(calls, tmp_path / "requests.jsonl")
+    model.configure_protocol(protocol(max_changes_per_agent=1))
+    result = getattr(model, role)(policy(), {}, [], agent="A")
+    assert [c["skill_id"] for c in result] == ["corrected"]
+    assert len(calls.requests) == 2
+    request = calls.requests[1][1]
+    assert "at most 1 operation" in request["system"]
+    data = json.loads(request["messages"][0]["content"])
+    assert "received 2, maximum 1" in data["format_correction"]
+
+
+def test_repeated_oversized_generation_is_bounded_and_never_evaluated(tmp_path):
+    calls = Responses()
+    calls.result = {"changes": [change("first"), change("second")]}
+    rt, evaluated = controlled_runtime(tmp_path, lambda *_: (False, "completed"))
+    ctl = Controller(tmp_path / "ctl", policy=policy(), protocol=protocol(max_changes_per_agent=1),
+                     splits=splits(tmp_path), model=Model(calls, tmp_path / "requests.jsonl"), runtime=rt)
+    result, decision, _ = ctl.update(empty(), {"A": [{}]})
+    assert decision.status == "HOLD" and result == empty()
+    assert len(calls.requests) == 2 and not evaluated and not ctl.store.state["spent"]
