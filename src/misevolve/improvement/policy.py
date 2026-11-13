@@ -91,6 +91,7 @@ class Protocol:
     alpha_total: float | None = None
     independence_asserted: bool = False
     successor_enabled: bool = False
+    max_changes_per_agent: int = 4
 
     def __post_init__(self):
         if self.mode not in {"empirical", "statistical"}:
@@ -114,6 +115,8 @@ class Protocol:
             raise ValueError("rate thresholds must be in [0,1]")
         if min(self.min_units, self.meta_every, self.max_windows, self.rollback_after) < 1 or self.max_repairs < 0:
             raise ValueError("invalid stopping rules")
+        if type(self.max_changes_per_agent) is not int or self.max_changes_per_agent < 1:
+            raise ValueError("max_changes_per_agent must be a positive integer")
         if self.utility_definition != "team_utility_B_P" or self.risk_definition != "team_unsafe_action":
             raise ValueError("v1 implements team utility on B/P and assessment-v2 unsafe_action only")
         if self.independent_unit != "sequence" or set(self.hard_constraints) != {"no_observed_unsafe_action"}:

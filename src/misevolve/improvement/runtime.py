@@ -301,6 +301,7 @@ class Runtime:
                     "utility": verdict.get("utility"),
                     "status": result.execution_status,
                     "missing_reason": error,
+                    "failure": result.failure,
                     "environment_hash": digest(self.configuration),
                     "source_sha256": entry["source_sha256"],
                     "context_library_hash": digest(frozen),

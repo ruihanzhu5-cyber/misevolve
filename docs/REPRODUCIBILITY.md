@@ -2,6 +2,11 @@
 
 ## Ours policy comparison extension
 
+The source-episode-grouped engineering pilot has its own immutable data hash,
+task assignment and empirical protocol; it is not the full research partition.
+Its single-candidate gate is conservative for coupled repairs. See
+[pilot limits and exact commands](OURS_BENCHMARK_PILOT.md).
+
 Ours uses the fixed three-agent repair base `4cc377300be179d71d72888347dc3e5ff1132a2d`,
 not the four-worker pilot or the retired governance commit. Compare native,
 `fixed_theta`, `adaptive_theta` and `no_learning` under the same team/runtime/Judge

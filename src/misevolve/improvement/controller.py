@@ -58,10 +58,10 @@ class Controller:
         after = self.runtime.evaluate(new, label=f"{label}-new", **args)
         return before, after
 
-    def _development(self, old, candidate, label):
+    def _development(self, old, candidate, label, *, actions=None):
         tasks = self.splits.select("development", actor="validator")
         details, worst = [], "ACCEPT"
-        for action in self.policy.val:
+        for action in self.policy.val if actions is None else actions:
             if action == "successor":
                 if not self.protocol.successor_enabled:
                     raise ValueError("successor action is disabled by the fixed protocol")
@@ -72,6 +72,7 @@ class Controller:
                     for agent, own in traces.items():
                         if own:
                             edits = self.model.generate(REFERENCE_POLICY, child[agent], own, agent=agent)
+                            self._check_change_limit(edits)
                             child = self.runtime.edit(child, edits, agent=agent)
                     successors.append(child)
                     evolution.append(
@@ -82,7 +83,9 @@ class Controller:
                             "reference_policy": REFERENCE_POLICY.hash,
                         }
                     )
-                before, after = self._evaluate_pair(*successors, selected, purpose="development", label=label)
+                before, after = self._evaluate_pair(
+                    *successors, selected, purpose="development", label=f"{label}-{action}"
+                )
                 decision = compare(before, after, self.protocol, development=True)
                 details.append(
                     {
@@ -100,7 +103,7 @@ class Controller:
                 continue
             selected = [t for t in tasks if t["task"]["kind"] == "B"] if action == "cross_receiver" else tasks
             before, after = self._evaluate_pair(
-                old, candidate, selected, purpose="development", action=action, label=label
+                old, candidate, selected, purpose="development", action=action, label=f"{label}-{action}"
             )
             decision = compare(before, after, self.protocol, development=True)
             details.append(
@@ -116,6 +119,37 @@ class Controller:
                 worst = decision.status
         return worst, details
 
+    def _check_change_limit(self, changes):
+        if not isinstance(changes, list) or len(changes) > self.protocol.max_changes_per_agent:
+            raise ValueError("fixed per-agent candidate/repair change limit exceeded")
+
+    def _candidate_checks(self, old, candidate, label):
+        """Gate every final changed skill as well as their complete installation.
+
+        Recompute units after repair; an old failed version cannot be hidden by a
+        passing combination. Deletes are tested by removing the old skill alone.
+        Coupled merges/dependencies must also pass this conservative per-skill gate.
+        """
+        details, statuses = [], []
+        for agent in candidate:
+            for sid in sorted(old[agent].keys() | candidate[agent].keys()):
+                if old[agent].get(sid) == candidate[agent].get(sid):
+                    continue
+                single = deepcopy(old)
+                if sid in candidate[agent]:
+                    single[agent][sid] = deepcopy(candidate[agent][sid])
+                else:
+                    del single[agent][sid]
+                status, evidence = self._development(old, single, f"single-{label}-{agent}-{sid}")
+                statuses.append(status)
+                details.extend(evidence)
+        if not statuses:
+            return "HOLD", []
+        status, evidence = self._development(old, candidate, f"combined-{label}")
+        statuses.append(status)
+        details.extend(evidence)
+        return ("HOLD" if "HOLD" in statuses else "REJECT" if "REJECT" in statuses else "ACCEPT"), details
+
     def _intervene(self, old, candidate, details, agent):
         candidates = {
             sid: bundle for sid, bundle in candidate[agent].items() if sid in old[agent] and bundle != old[agent][sid]
@@ -128,8 +162,18 @@ class Controller:
         sid = hypothesis["skill_id"]
         intervention = deepcopy(candidate)
         intervention[agent][sid] = deepcopy(old[agent][sid])
-        tasks = self.splits.select("development", actor="validator")
-        full, altered = self._evaluate_pair(candidate, intervention, tasks, purpose="development", label="intervention")
+        # Replay the same registered execution actions, including receiver delivery
+        # and E_ref evolution. A plain behavior retest cannot explain another action.
+        failures = [d for d in details if d["decision"]["status"] != "ACCEPT"]
+        matched_failures = [d for d in failures if d["target_library"] == digest(candidate)]
+        if failures and not matched_failures:
+            return {"status": "unavailable", "reason": "failure is in an isolated candidate, not this full library",
+                    "agent": agent}
+        actions = tuple(dict.fromkeys(d["action"] for d in matched_failures))
+        actions = actions or self.policy.val
+        _, matched = self._development(candidate, intervention, "intervention", actions=actions)
+        full = [row for item in matched for row in item["before"]]
+        altered = [row for item in matched for row in item["after"]]
         contributions = []
         for a, b in zip(full, altered, strict=True):
             contributions.append(
@@ -147,6 +191,8 @@ class Controller:
             "old_hash": old[agent][sid]["content_hash"],
             "full_hash": candidate[agent][sid]["content_hash"],
             "hypothesis": hypothesis,
+            "matched_actions": list(actions),
+            "matched_evidence": matched,
             "full": full,
             "intervention": altered,
             "contributions": contributions,
@@ -161,13 +207,10 @@ class Controller:
                 if not own_traces:
                     continue
                 proposed = self.model.generate(self.policy, library[agent], own_traces, agent=agent)
+                self._check_change_limit(proposed)
                 changes[agent] = proposed
-                for change in proposed:
-                    single = self.runtime.edit(library, [change], agent=agent)
-                    _, evidence = self._development(library, single, f"single-{window}-{agent}")
-                    development.extend(evidence)
                 candidate = self.runtime.edit(candidate, proposed, agent=agent)
-            status, evidence = self._development(library, candidate, f"combined-{window}")
+            status, evidence = self._candidate_checks(library, candidate, str(window))
             development.extend(evidence)
             previous_failure = None
             for attempt in range(self.protocol.max_repairs):
@@ -186,6 +229,7 @@ class Controller:
                 if failure_signature == previous_failure:
                     break
                 previous_failure = failure_signature
+                before_repair = deepcopy(candidate)
                 for agent in changes:
                     intervention = self._intervene(library, candidate, evidence, agent)
                     interventions.append(intervention)
@@ -195,6 +239,7 @@ class Controller:
                         {"development": evidence, "intervention": intervention},
                         agent=agent,
                     )
+                    self._check_change_limit(patch)
                     fixed = self.runtime.edit(candidate, patch, agent=agent)
                     repairs.append(
                         {
@@ -206,11 +251,14 @@ class Controller:
                         }
                     )
                     candidate = fixed
-                status, evidence = self._development(library, candidate, f"repaired-{window}-{attempt}")
+                if candidate == before_repair:
+                    break
+                status, evidence = self._candidate_checks(library, candidate, f"repaired-{window}-{attempt}")
                 development.extend(evidence)
             frozen = self.store.put("candidates", candidate)
             if status != "ACCEPT":
-                decision = Decision(status, "development checks did not pass", {})
+                reason = "no effective library change" if candidate == library else "development checks did not pass"
+                decision = Decision(status, reason, {})
             else:
                 # One independent shard, consumed once after the final repair and freeze.
                 shard = f"{self.namespace}-{window}"

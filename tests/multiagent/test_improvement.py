@@ -176,7 +176,12 @@ def test_frozen_evaluation_prompt_matches_enforced_skill_transfer_restriction(tm
     with rt.branch(candidate, "frozen-contract") as (_, workers, executor):
         native = executor._prompt("A", "B", {})
         assert "Use transfer to share a local Skill." in native
-        assert "Probe: Skill transfers are disabled." in executor._prompt("A", "P", {})
+        for agent in "ABC":
+            probe = executor._prompt(agent, "P", {})
+            assert "Frozen-library evaluation" in probe
+            assert "Do not send SKILL_PAYLOAD" in probe
+            assert "for direct native import" not in probe
+            assert "For SKILL_PAYLOAD or SKILL_OFFER include" not in probe
         executor.transfers = FrozenTransfers(executor.transfers.registry, workers, executor.router)
         before = snapshot(workers)
         for agent in "ABC":
@@ -551,7 +556,8 @@ def test_real_repair_and_revalidation_use_theta_rep(tmp_path):
     assert history["interventions"][0]["contributions"][0]["c_R"] == 1
 
 
-def test_full_meta_runs_both_frozen_policies_and_selects_executed_libraries(tmp_path):
+@pytest.mark.parametrize("learning_kind", ["M", "B"])
+def test_full_meta_runs_both_frozen_policies_and_selects_executed_libraries(tmp_path, learning_kind):
     live = observable_runtime(tmp_path)
     initial = live.edit(empty(), [change(instructions="SYNTHETIC_RISK Verify synthetic arithmetic.")], agent="A")
     theta = replace(policy(), gen="retain current procedure")
@@ -582,7 +588,7 @@ def test_full_meta_runs_both_frozen_policies_and_selects_executed_libraries(tmp_
     manifest = splits(
         tmp_path,
         [
-            entry("policy_selection", "selection", "meta-2"),
+            entry("policy_selection", "selection", "meta-2", kind=learning_kind),
             entry("inner_confirmation", "old-confirm", "meta-2-old-1"),
             entry("inner_confirmation", "new-confirm", "meta-2-new-1"),
             entry("outer_confirmation", "outer", "meta-2"),
@@ -600,14 +606,24 @@ def test_full_meta_runs_both_frozen_policies_and_selects_executed_libraries(tmp_
     before = deepcopy(initial)
     ctl.meta(initial, 2)
     event = ctl.store.get(ctl.store.state["events"][-1])
-    assert event["decision"]["status"] == "ACCEPT", event
-    assert ctl.policy.gen == "remove synthetic risky step" and initial == before
+    # B transfers the risky skill into multiple stores. Repairing one store alone
+    # leaves another unsafe, so the new single-candidate gate must reject that case.
+    accepted = learning_kind == "M"
+    assert event["decision"]["status"] == ("ACCEPT" if accepted else "REJECT"), event
+    assert ctl.policy.gen == ("remove synthetic risky step" if accepted else theta.gen)
+    assert initial == before
     sealed = next(
         ctl.store.get(ref) for ref in ctl.store.state["events"] if ctl.store.get(ref)["type"] == "meta_confirmation"
     )
     evaluations = ctl.store.get(sealed["sealed"])
-    assert evaluations["old"][0]["risk"] is True and evaluations["new"][0]["risk"] is False
-    assert evaluations["old_library"] != evaluations["new_library"]
+    assert evaluations["old"][0]["risk"] is True
+    assert evaluations["new"][0]["risk"] is (not accepted)
+    if accepted:
+        assert evaluations["old_library"] != evaluations["new_library"]
+    else:
+        # Native import IDs differ between isolated rollouts even when all edits
+        # are rejected; risk/content behavior, not byte-identical IDs, is the oracle.
+        assert all(row["risk"] is True for row in evaluations["new"])
 
 
 def test_theta_val_changes_executed_actions_and_fixed_confirmation_survives(tmp_path):

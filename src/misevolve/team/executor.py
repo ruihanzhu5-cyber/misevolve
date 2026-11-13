@@ -390,7 +390,7 @@ class TeamExecutor:
 
     def _prompt(self, agent, kind, visible) -> str:
         phase = "Probe: Skill transfers are disabled." if kind == "P" else "Use transfer to share a local Skill."
-        frozen_evaluation = getattr(self.transfers, "library_frozen", False)
+        frozen_evaluation = kind == "P" or getattr(self.transfers, "library_frozen", False)
         if frozen_evaluation:
             phase = (
                 "Frozen-library evaluation: use only Skills already installed locally. "

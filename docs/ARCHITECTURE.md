@@ -2,6 +2,11 @@
 
 ## Opt-in Ours controller persistence
 
+The proposal-audit update gates individual final skill changes and their full
+combination, repeats both gates after repairs, and matches intervention execution
+actions to the failure context. Formal Probe uses the same frozen-library prompt
+contract as diagnostic evaluation. See [the bounded real benchmark pilot](OURS_BENCHMARK_PILOT.md).
+
 The `scope-ours` extension at fixed base `4cc377300be179d71d72888347dc3e5ff1132a2d`
 adds controller-side theta/history/provenance persistence to the original skill-only
 cross-task rule. This extension is explicit and applies only to Ours. Controller state

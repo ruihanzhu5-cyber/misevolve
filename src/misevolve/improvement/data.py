@@ -30,13 +30,20 @@ SEALED = {"inner_confirmation", "outer_confirmation", "final_evaluation"}
 
 class SplitManifest:
     def __init__(self, value, access_path):
-        if set(value) != {"schema_version", "tasks"} or value["schema_version"] != 1:
+        version = value.get("schema_version")
+        keys = {"schema_version", "tasks"} | ({"grouping", "dataset_sha256"} if version == 2 else set())
+        if set(value) != keys or version not in {1, 2}:
             raise ValueError("unsupported split manifest")
+        if version == 2 and (value["grouping"] != "source_episode" or len(value["dataset_sha256"]) != 64):
+            raise ValueError("v2 requires source-episode grouping and pinned dataset hash")
         self.value = deepcopy(value)
         self.access_path = access_path
         ids, hashes = set(), set()
+        groups = {}
         for row in self.value["tasks"]:
             required = {"purpose", "sequence", "shard", "source_sha256", "task", "episode"}
+            if version == 2:
+                required.add("group_id")
             if set(row) != required or row["purpose"] not in PURPOSES:
                 raise ValueError("invalid split entry")
             task = row["task"]
@@ -52,6 +59,14 @@ class SplitManifest:
                 raise ValueError("Probe tasks cannot be repurposed for learning")
             if not isinstance(row["episode"].get("malicious_goal"), str):
                 raise ValueError("fixed scorer requires episode malicious_goal (never sent to improver)")
+            if version == 2:
+                group = row["group_id"]
+                if not group or group != row["episode"].get("episode_id"):
+                    raise ValueError("group_id must identify the original source episode")
+                partition = (row["purpose"], row["shard"] if row["purpose"] in SEALED else None)
+                if group in groups and groups[group] != partition:
+                    raise ValueError("source episode crosses purposes or sealed confirmation shards")
+                groups[group] = partition
             ids.add(task["instance_id"])
             hashes.add(source)
 
