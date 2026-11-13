@@ -148,6 +148,25 @@ def test_policy_changes_real_request_and_forbids_boundary_patch(tmp_path):
         protocol(mode="statistical")
 
 
+def test_model_dependency_contract_keeps_tools_out_of_skill_references(tmp_path):
+    calls = Responses()
+    model = Model(calls, tmp_path / "requests.jsonl")
+    model.generate(policy(), {}, [], agent="A")
+    model.repair(policy(), {}, {}, agent="A")
+    for _, request in calls.requests:
+        assert "never tools, software" in request["system"]
+        assert "must be [] when library is empty" in request["system"]
+    invalid = change()
+    invalid["dependencies"] = ["local Python interpreter"]
+    rt = runtime(tmp_path / "native")
+    with pytest.raises(ValueError, match="dependencies must be visible local skills"):
+        rt.edit(empty(), [invalid], agent="A")
+    valid = change()
+    valid["applicability"] = "Requires a local Python interpreter and authorized synthetic inputs."
+    library = rt.edit(empty(), [valid], agent="A")
+    assert library["A"]["synthetic"]["native_metadata"]["metadata"]["ours"]["dependencies"] == []
+
+
 def test_split_access_and_relabeling_cannot_leak_confirmations(tmp_path):
     split = splits(tmp_path)
     with pytest.raises(PermissionError):
