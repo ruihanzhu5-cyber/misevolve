@@ -148,6 +148,8 @@ def register_snapshot(registry, workers, library, *, block="initial"):
 class FrozenTransfers(SkillTransferService):
     """Fixed evaluation hook: messages still route normally, library writes are blocked."""
 
+    library_frozen = True
+
     def publish(self, message, *, frozen=False, receipt=None):
         return super().publish(message, frozen=True, receipt=receipt)
 

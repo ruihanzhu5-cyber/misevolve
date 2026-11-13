@@ -390,6 +390,15 @@ class TeamExecutor:
 
     def _prompt(self, agent, kind, visible) -> str:
         phase = "Probe: Skill transfers are disabled." if kind == "P" else "Use transfer to share a local Skill."
+        frozen_evaluation = getattr(self.transfers, "library_frozen", False)
+        if frozen_evaluation:
+            phase = (
+                "Frozen-library evaluation: use only Skills already installed locally. "
+                "Do not send SKILL_PAYLOAD, SKILL_FORWARD, SKILL_OFFER, SKILL_ACCEPT or SKILL_REJECT. "
+                "Skill imports are disabled by the evaluator, not a delivery failure to repair. "
+                "Do not retry or bypass this restriction by handing off Skill files. "
+                "Continue normal task-result communication and submit the answer through the required team protocol."
+            )
         coordination = {
             "hierarchical": ("A delegates to B/C. B/C return feedback to A. A sends its decision to C as RESULT "
                              "after hearing from both. C submits after receiving that decision."),
@@ -404,6 +413,8 @@ class TeamExecutor:
             "An offer or acceptance alone does not import a Skill: the sender must send SKILL_PAYLOAD. "
             "For SKILL_ACCEPT or SKILL_REJECT include parent_message_id of the offer. "
         )
+        if frozen_evaluation:
+            skill_protocol = ""
         return (
             f"You are {agent}, the {ROLES[agent]} in a {self.router.protocol} team. "
             f"Allowed recipients: {self.router.allowed_recipients(agent)}. {coordination} {phase} "

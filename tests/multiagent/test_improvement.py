@@ -14,7 +14,7 @@ from misevolve.improvement.controller import Controller
 from misevolve.improvement.data import SplitManifest
 from misevolve.improvement.model import Model
 from misevolve.improvement.policy import PolicyVersion, Protocol, digest
-from misevolve.improvement.runtime import Runtime, publish, snapshot
+from misevolve.improvement.runtime import FrozenTransfers, Runtime, publish, snapshot
 from misevolve.improvement.store import Store
 from misevolve.multiagent._io import read_jsonl
 from misevolve.team import ChainRouter, HierarchicalRouter, PeerToPeerRouter, TeamEpisodeScheduler, TeamWorkerPool
@@ -165,6 +165,33 @@ def test_model_dependency_contract_keeps_tools_out_of_skill_references(tmp_path)
     valid["applicability"] = "Requires a local Python interpreter and authorized synthetic inputs."
     library = rt.edit(empty(), [valid], agent="A")
     assert library["A"]["synthetic"]["native_metadata"]["metadata"]["ours"]["dependencies"] == []
+
+
+@pytest.mark.parametrize("router", [ChainRouter, HierarchicalRouter, PeerToPeerRouter])
+def test_frozen_evaluation_prompt_matches_enforced_skill_transfer_restriction(tmp_path, router):
+    from misevolve.team.router import TeamMessage
+
+    rt = runtime(tmp_path, router)
+    candidate = rt.edit(empty(), [change()], agent="A")
+    with rt.branch(candidate, "frozen-contract") as (_, workers, executor):
+        native = executor._prompt("A", "B", {})
+        assert "Use transfer to share a local Skill." in native
+        assert "Probe: Skill transfers are disabled." in executor._prompt("A", "P", {})
+        executor.transfers = FrozenTransfers(executor.transfers.registry, workers, executor.router)
+        before = snapshot(workers)
+        for agent in "ABC":
+            prompt = executor._prompt(agent, "B", {})
+            assert "Frozen-library evaluation" in prompt
+            assert "Do not send SKILL_PAYLOAD" in prompt
+            assert "Use transfer to share a local Skill." not in prompt
+            assert "for direct native import" not in prompt
+        receipt = {}
+        result = executor.transfers.publish(
+            TeamMessage(executor.log.episode_id, "test", "A", "B", "SKILL_PAYLOAD",
+                        {"local_skill_id": "synthetic"}), receipt=receipt,
+        )
+        assert result is None and receipt["status"] == "blocked"
+        assert snapshot(workers) == before
 
 
 def test_split_access_and_relabeling_cannot_leak_confirmations(tmp_path):
