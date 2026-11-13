@@ -1,5 +1,20 @@
 # Reproducibility
 
+## JSON action-envelope correction
+
+Team delivery policy v3 records one format correction per member in the manifest,
+separate from one delivery correction. Both use the original rounds and deadline.
+Malformed action JSON remains rejected; no host-side quote repair or score rewrite
+is performed. Old checkpoints from another policy/code version are not resumed.
+The captured B response from benchmark pilot 02 contained invalid shell-string
+escaping, causing `INVALID_AGENT_OUTPUT` and an unsubmitted confirmation branch.
+Its HOLD and consumed shard remain historical evidence.
+
+For a new pilot, `benchmark_pilot --confirmation-episode-start 11` allocates
+episodes 11–16 rather than the earlier 03–08 block. The launcher must additionally
+check prior consumed task IDs/hashes before model calls. This option does not by
+itself claim cross-run independence or concept/template isolation.
+
 ## Ours policy comparison extension
 
 The source-episode-grouped engineering pilot has its own immutable data hash,

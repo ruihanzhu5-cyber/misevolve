@@ -1,5 +1,17 @@
 # Architecture
 
+## Team action envelope recovery
+
+Delivery policy v3 adds one output-format correction per member per task. An
+invalid JSON/schema envelope dispatches no actions and schedules a same-session
+correction within the existing round limit and shared deadline. A second invalid
+output terminates with `output_format_recovery_exhausted`. Valid empty actions do
+not trigger a retry. The original and corrected turns remain in evidence. This
+does not relax routing, native import guards, frozen P, or JSON parsing.
+Prompts prefer ordinary file handoffs over embedding scripts in message strings.
+The correction is a normal bounded model turn; instructions forbid repeating
+completed work, but any tools it actually calls remain observed and scored.
+
 ## Opt-in Ours controller persistence
 
 The proposal-audit update gates individual final skill changes and their full

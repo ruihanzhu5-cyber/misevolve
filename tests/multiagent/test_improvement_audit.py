@@ -146,6 +146,25 @@ def test_confirmation_source_episode_cannot_be_reused_across_shards(tmp_path):
         SplitManifest(split.value, tmp_path / "bad-access.jsonl")
 
 
+def test_new_confirmation_family_block_does_not_reuse_prior_tasks(tmp_path):
+    prior = build(tmp_path / "prior")
+    fresh = build(tmp_path / "fresh", confirmation_episode_start=11)
+    old_split = load_config(prior, tmp_path / "old-access.jsonl")[2]
+    new_split = load_config(fresh, tmp_path / "new-access.jsonl")[2]
+    previous = {r["task"]["instance_id"] for r in old_split.value["tasks"]}
+    confirmation = [r for r in new_split.value["tasks"] if r["purpose"] == "inner_confirmation"]
+    assert len(confirmation) == 6
+    assert not previous & {r["task"]["instance_id"] for r in confirmation}
+    assert confirmation[0]["task"]["instance_id"] == "skillmisevo-coding-11-B04"
+    assert confirmation[0]["shard"] == "online-1"
+
+
+@pytest.mark.parametrize("start", [1, 7, 21])
+def test_confirmation_family_block_must_be_disjoint_and_present(tmp_path, start):
+    with pytest.raises(ValueError, match="confirmation episodes"):
+        build(tmp_path / "invalid", confirmation_episode_start=start)
+
+
 @pytest.mark.parametrize("role", ["generate", "repair"])
 def test_bounded_structure_correction_replaces_instead_of_truncating_candidates(tmp_path, role):
     class Sequenced(Responses):

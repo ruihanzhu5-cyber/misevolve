@@ -15,7 +15,13 @@ from .assessment import assess_task, behavior_summary
 from .checkpoint import BOUNDARIES, restore_native_metadata
 from .checkpoint import load as load_checkpoint
 from .checkpoint import save as save_checkpoint
-from .executor import DELIVERY_CORRECTION_TURNS, TeamExecutor, TeamTaskExecutionError, TeamWorkerPool
+from .executor import (
+    DELIVERY_CORRECTION_TURNS,
+    OUTPUT_FORMAT_CORRECTION_TURNS,
+    TeamExecutor,
+    TeamTaskExecutionError,
+    TeamWorkerPool,
+)
 from .handoff import MAX_FILE_BYTES, MAX_TASK_BYTES, MAX_TASK_FILES
 from .router import AGENTS, TeamEventLogger
 from .skills import SkillTransferService
@@ -28,7 +34,8 @@ class TeamEpisodeScheduler:
     def __init__(
         self, pool: TeamWorkerPool, router_type, *, judge, artifact_judge=None, max_rounds=8,
         run_metadata=None, configure_workers=None, stop_after_pos=None, ensure_healthy=None, before_checkpoint=None,
-        recover_initial_block=False, retry_failed_initial_task=False, recover_prepared_block=False, recover_learning=False,
+        recover_initial_block=False, retry_failed_initial_task=False, recover_prepared_block=False,
+        recover_learning=False,
         improvement_hook=None,
     ):
         self.pool = pool
@@ -74,8 +81,10 @@ class TeamEpisodeScheduler:
             "episode_id": episode_id, "communication_protocol": router.protocol, "edges": sorted(router.edges),
             "agents": AGENTS, "max_rounds": self.max_rounds, "exposure_submitter": "A", "team_submitter": "C",
             "probe_policy": "frozen_local_native_search_no_import",
-            "delivery_policy": {"version": 2, "chain_skill_transfer": "direct_native_payload_no_handshake",
+            "delivery_policy": {"version": 3, "chain_skill_transfer": "direct_native_payload_no_handshake",
                                 "correction_turns_per_member": DELIVERY_CORRECTION_TURNS,
+                                "output_format_corrections_per_member": OUTPUT_FORMAT_CORRECTION_TURNS,
+                                "output_format_correction_budget": "existing_rounds_and_task_deadline",
                                 "receipt_channel": "local_harness", "artifact_max_files": MAX_TASK_FILES,
                                 "artifact_max_bytes": MAX_TASK_BYTES, "artifact_max_file_bytes": MAX_FILE_BYTES},
             "skill_read_evidence": "paired_successful_read_tool_result_not_semantic_adoption",
@@ -97,7 +106,9 @@ class TeamEpisodeScheduler:
             snapshots = self.block_recovery['stores']
         elif self.recover_initial_block:
             from .recovery import validate_first_block
-            rows, self.recovery_audit = validate_first_block(root, manifest, retry_failed=self.retry_failed_initial_task)
+            rows, self.recovery_audit = validate_first_block(
+                root, manifest, retry_failed=self.retry_failed_initial_task,
+            )
             first, snapshots = 0, None
         elif self.pool.resume:
             first, rows, snapshots = load_checkpoint(root, manifest)
@@ -162,7 +173,8 @@ class TeamEpisodeScheduler:
                     if prior['execution_status']=='timeout':
                         continue
                     restored=restore_pending(root,prior,task,workers,self.block_recovery)
-                    for agent,trace in restored.items(): traces[agent].append(trace)
+                    for agent, trace in restored.items():
+                        traces[agent].append(trace)
                     continue
                 if self.recovery_audit is not None and start == 0:
                     prior = next((r for r in rows if r.get("pos") == task["pos"]), None)
